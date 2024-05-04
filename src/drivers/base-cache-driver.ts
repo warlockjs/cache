@@ -1,6 +1,6 @@
-import { GenericObject } from "@mongez/reinforcements";
+import type { GenericObject } from "@mongez/reinforcements";
 import { log } from "@warlock.js/logger";
-import { CacheData, CacheDriver, CacheOperationType } from "../types";
+import type { CacheData, CacheDriver, CacheOperationType } from "../types";
 import { parseCacheKey } from "../utils";
 
 const messages = {
@@ -109,7 +109,7 @@ export abstract class BaseCacheDriver<ClientType, Options extends GenericObject>
       return log.error(
         "cache:" + this.name,
         operation,
-        (key ? key + " " : "") + messages[operation]
+        (key ? key + " " : "") + messages[operation],
       );
     }
 
@@ -117,14 +117,14 @@ export abstract class BaseCacheDriver<ClientType, Options extends GenericObject>
       return log.success(
         "cache:" + this.name,
         operation,
-        (key ? key + " " : "") + messages[operation]
+        (key ? key + " " : "") + messages[operation],
       );
     }
 
     log.info(
       "cache:" + this.name,
       operation,
-      (key ? key + " " : "") + messages[operation]
+      (key ? key + " " : "") + messages[operation],
     );
   }
 

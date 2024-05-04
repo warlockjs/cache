@@ -4,9 +4,9 @@ import {
   putJsonFileAsync,
   removeDirectoryAsync,
 } from "@mongez/fs";
-import { GenericObject } from "@mongez/reinforcements";
+import type { GenericObject } from "@mongez/reinforcements";
 import path from "path";
-import { CacheDriver, FileCacheOptions } from "../types";
+import type { CacheDriver, FileCacheOptions } from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
 
 export class FileCacheDriver

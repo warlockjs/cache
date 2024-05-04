@@ -1,6 +1,11 @@
-import { GenericObject, get } from "@mongez/reinforcements";
-import { MemoryCacheDriver } from "@warlock.js/core";
-import { CacheData, CacheDriver, MemoryExtendedCacheOptions } from "../types";
+import type { GenericObject } from "@mongez/reinforcements";
+import { get } from "@mongez/reinforcements";
+import type {
+  CacheData,
+  CacheDriver,
+  MemoryExtendedCacheOptions,
+} from "../types";
+import { MemoryCacheDriver } from "./memory-cache-driver";
 
 export class MemoryExtendedCacheDriver
   extends MemoryCacheDriver

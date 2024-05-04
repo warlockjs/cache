@@ -1,6 +1,6 @@
-import { GenericObject } from "@mongez/reinforcements";
+import type { GenericObject } from "@mongez/reinforcements";
 import { log } from "@warlock.js/logger";
-import { CacheDriver, NullCacheDriverOptions } from "../types";
+import type { CacheDriver, NullCacheDriverOptions } from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
 
 export class NullCacheDriver

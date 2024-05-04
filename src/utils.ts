@@ -1,11 +1,12 @@
-import { GenericObject, rtrim } from "@mongez/reinforcements";
+import type { GenericObject } from "@mongez/reinforcements";
+import { rtrim } from "@mongez/reinforcements";
 
 /**
  * Make a proper key for the cache
  */
-export async function parseCacheKey(
+export function parseCacheKey(
   key: string | GenericObject,
-  options: { globalPrefix?: string | (() => string) } = {}
+  options: { globalPrefix?: string | (() => string) } = {},
 ) {
   if (typeof key === "object") {
     key = JSON.stringify(key);
@@ -16,7 +17,7 @@ export async function parseCacheKey(
 
   const cachePrefix =
     typeof options.globalPrefix === "function"
-      ? await options.globalPrefix()
+      ? options.globalPrefix()
       : options.globalPrefix;
 
   return String(cachePrefix ? rtrim(cachePrefix, ".") + "." + key : key);

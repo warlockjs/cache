@@ -1,5 +1,5 @@
-import { GenericObject } from "@mongez/reinforcements";
-import { CacheConfigurations, CacheDriver, DriverClass } from "./types";
+import type { GenericObject } from "@mongez/reinforcements";
+import type { CacheConfigurations, CacheDriver, DriverClass } from "./types";
 
 export class CacheManager implements CacheDriver<any, any> {
   /**
@@ -105,8 +105,8 @@ export class CacheManager implements CacheDriver<any, any> {
   /**
    * {@inheritdoc}
    */
-  public parseKey(key: string | GenericObject) {
-    return this.currentDriver?.parseKey(key) || "";
+  public async parseKey(key: string | GenericObject) {
+    return (await this.currentDriver?.parseKey(key)) || JSON.stringify(key);
   }
 
   /**

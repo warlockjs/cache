@@ -1,5 +1,6 @@
-import { GenericObject, get, set, unset } from "@mongez/reinforcements";
-import { CacheData, CacheDriver, MemoryCacheOptions } from "../types";
+import type { GenericObject } from "@mongez/reinforcements";
+import { get, set, unset } from "@mongez/reinforcements";
+import type { CacheData, CacheDriver, MemoryCacheOptions } from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
 
 export class MemoryCacheDriver

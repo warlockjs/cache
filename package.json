@@ -1,6 +1,6 @@
 {
     "name": "@warlock.js/cache",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "A Robust Cache Manager for Nodejs",
     "main": "src/index.ts",
     "dependencies": {

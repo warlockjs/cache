@@ -1,5 +1,5 @@
-import { GenericObject } from "@mongez/reinforcements";
-import { CacheDriver, LRUMemoryCacheOptions } from "../types";
+import type { GenericObject } from "@mongez/reinforcements";
+import type { CacheDriver, LRUMemoryCacheOptions } from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
 
 class CacheNode {

@@ -1,8 +1,7 @@
-import { GenericObject } from "@mongez/reinforcements";
+import type { GenericObject } from "@mongez/reinforcements";
 import { log } from "@warlock.js/logger";
 import { createClient } from "redis";
-import { CacheData, CacheDriver, RedisOptions } from "../types";
-import { parseCacheKey } from "../utils";
+import type { CacheData, CacheDriver, RedisOptions } from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
 
 export class RedisCacheDriver
