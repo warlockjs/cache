@@ -167,8 +167,6 @@ export abstract class BaseCacheDriver<ClientType, Options extends GenericObject>
     this.log("fetched", key);
 
     if (data.expiresAt && data.expiresAt < Date.now()) {
-      console.log("Expired key", key);
-
       this.remove(key);
       return null;
     }
