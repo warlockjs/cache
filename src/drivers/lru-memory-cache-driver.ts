@@ -75,18 +75,17 @@ export class LRUMemoryCacheDriver
 
     this.log("caching", key);
 
-    const node = this.cache.get(key)!;
-    if (node) {
-      node.value = value;
+    const existingNode = this.cache.get(key);
+    if (existingNode) {
+      existingNode.value = value;
 
-      this.moveHead(node);
+      this.moveHead(existingNode);
     } else {
-      const node = new CacheNode(key, value);
+      const newNode = new CacheNode(key, value);
 
-      this.cache.set(key, node);
+      this.cache.set(key, newNode);
 
-      this.addNode(node);
-
+      this.addNode(newNode);
       if (this.cache.size > this.capacity) {
         this.removeTail();
       }
