@@ -80,6 +80,10 @@ export class MemoryCacheDriver
 
     this.log("caching", parsedKey);
 
+    if (ttl === undefined) {
+      ttl = this.ttl;
+    }
+
     const data = this.prepareDataForStorage(value, ttl);
 
     if (ttl) {
