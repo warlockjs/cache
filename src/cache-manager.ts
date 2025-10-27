@@ -68,7 +68,11 @@ export class CacheManager implements CacheDriver<any, any> {
   }
 
   /**
-   * {@inheritdoc}
+   * Set a value in the cache
+   *
+   * @param key The cache key, could be an object or string
+   * @param value The value to be stored in the cache
+   * @param ttl The time to live in seconds
    */
   public async set(key: string, value: any, ttl?: number) {
     return this.currentDriver?.set(key, value, ttl);

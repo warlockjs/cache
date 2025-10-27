@@ -1,4 +1,4 @@
-import type { GenericObject } from "@mongez/reinforcements";
+import { clone, type GenericObject } from "@mongez/reinforcements";
 import { log } from "@warlock.js/logger";
 import type { CacheData, CacheDriver, CacheOperationType } from "../types";
 import { parseCacheKey } from "../utils";
@@ -171,7 +171,8 @@ export abstract class BaseCacheDriver<ClientType, Options extends GenericObject>
       return null;
     }
 
-    return data.data || null;
+    // Make sure to return immutable data
+    return clone(data.data) || null;
   }
 
   /**
