@@ -13,14 +13,14 @@ export function parseCacheKey(
   }
 
   // remove any curly braces and double quotes along with []
-  key = key.replace(/[{}"[\]]/g, "").replaceAll(/[:.,]/g, "_");
+  key = key.replace(/[{}"[\]]/g, "").replaceAll(/[:,]/g, ".");
 
   const cachePrefix =
     typeof options.globalPrefix === "function"
       ? options.globalPrefix()
       : options.globalPrefix;
 
-  return String(cachePrefix ? rtrim(cachePrefix, "_") + "_" + key : key);
+  return String(cachePrefix ? rtrim(cachePrefix, ".") + "." + key : key);
 }
 
 export enum EXPIRES_AFTER {

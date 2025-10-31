@@ -172,7 +172,14 @@ export abstract class BaseCacheDriver<ClientType, Options extends GenericObject>
     }
 
     // Make sure to return immutable data
-    return clone(data.data) || null;
+    try {
+      return data.data ? clone(data.data) : null;
+    } catch (error) {
+      console.log(data);
+
+      console.error(error);
+      throw error;
+    }
   }
 
   /**

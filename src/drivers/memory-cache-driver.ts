@@ -57,6 +57,7 @@ export class MemoryCacheDriver
     // do not block the process from exiting
     interval.unref();
   }
+
   /**
    * {@inheritdoc}
    */
