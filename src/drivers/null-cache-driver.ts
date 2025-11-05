@@ -1,6 +1,6 @@
 import type { GenericObject } from "@mongez/reinforcements";
 import { log } from "@warlock.js/logger";
-import type { CacheDriver, NullCacheDriverOptions } from "../types";
+import type { CacheDriver, CacheKey, NullCacheDriverOptions } from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
 
 export class NullCacheDriver
@@ -48,7 +48,7 @@ export class NullCacheDriver
   /**
    * {@inheritdoc}
    */
-  public async parseKey(_key: string | GenericObject) {
+  public parseKey(_key: CacheKey) {
     return "";
   }
 
@@ -66,7 +66,7 @@ export class NullCacheDriver
   /**
    * {@inheritdoc}
    */
-  public async set(key: string | GenericObject, _value: any) {
+  public async set(key: CacheKey, _value: any) {
     log.info("cache", "setting key", key);
 
     log.success("cache", "key set", key);
@@ -77,7 +77,7 @@ export class NullCacheDriver
   /**
    * {@inheritdoc}
    */
-  public async get(key: string | GenericObject) {
+  public async get(key: CacheKey) {
     log.info("cache", "fetching", key);
 
     log.success("cache", "fetched", key);
@@ -88,7 +88,7 @@ export class NullCacheDriver
   /**
    * {@inheritdoc}
    */
-  public async remove(key: string | GenericObject) {
+  public async remove(key: CacheKey) {
     log.info("cache", "removing", key);
 
     log.success("cache", "removed", key);

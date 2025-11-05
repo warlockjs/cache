@@ -4,9 +4,9 @@ import {
   putJsonFileAsync,
   removeDirectoryAsync,
 } from "@mongez/fs";
-import type { GenericObject } from "@mongez/reinforcements";
 import path from "path";
-import type { CacheDriver, FileCacheOptions } from "../types";
+import type { CacheDriver, CacheKey, FileCacheOptions } from "../types";
+import { CacheConfigurationError } from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
 
 export class FileCacheDriver
@@ -19,6 +19,19 @@ export class FileCacheDriver
   public name = "file";
 
   /**
+   * {@inheritdoc}
+   */
+  public setOptions(options: FileCacheOptions) {
+    if (!options.directory) {
+      throw new CacheConfigurationError(
+        "File driver requires 'directory' option to be configured.",
+      );
+    }
+
+    return super.setOptions(options);
+  }
+
+  /**
    * Get the cache directory
    */
   public get directory() {
@@ -28,7 +41,7 @@ export class FileCacheDriver
       return directory();
     }
 
-    throw new Error(
+    throw new CacheConfigurationError(
       "Cache directory is not defined, please define it in the file driver options",
     );
   }
@@ -50,7 +63,7 @@ export class FileCacheDriver
    * {@inheritdoc}
    */
   public async removeNamespace(namespace: string) {
-    this.log("cleared", namespace);
+    this.log("clearing", namespace);
 
     try {
       await removeDirectoryAsync(path.resolve(this.directory, namespace));
@@ -66,8 +79,8 @@ export class FileCacheDriver
   /**
    * {@inheritdoc}
    */
-  public async set(key: string | GenericObject, value: any, ttl?: number) {
-    key = await this.parseKey(key);
+  public async set(key: CacheKey, value: any, ttl?: number) {
+    key = this.parseKey(key);
 
     this.log("caching", key);
 
@@ -81,14 +94,17 @@ export class FileCacheDriver
 
     this.log("cached", key);
 
+    // Emit set event
+    await this.emit("set", { key, value, ttl });
+
     return this;
   }
 
   /**
    * {@inheritdoc}
    */
-  public async get(key: string | GenericObject) {
-    const parsedKey = await this.parseKey(key);
+  public async get(key: CacheKey) {
+    const parsedKey = this.parseKey(key);
 
     this.log("fetching", parsedKey);
 
@@ -99,9 +115,21 @@ export class FileCacheDriver
         path.resolve(fileDirectory, this.fileName),
       );
 
-      return this.parseCachedData(parsedKey, value);
+      const result = await this.parseCachedData(parsedKey, value);
+
+      if (result === null) {
+        // Expired
+        await this.emit("miss", { key: parsedKey });
+      } else {
+        // Emit hit event
+        await this.emit("hit", { key: parsedKey, value: result });
+      }
+
+      return result;
     } catch (error) {
       this.log("notFound", parsedKey);
+      // Emit miss event
+      await this.emit("miss", { key: parsedKey });
       this.remove(key);
       return null;
     }
@@ -110,8 +138,8 @@ export class FileCacheDriver
   /**
    * {@inheritdoc}
    */
-  public async remove(key: string | GenericObject) {
-    const parsedKey = await this.parseKey(key);
+  public async remove(key: CacheKey) {
+    const parsedKey = this.parseKey(key);
     this.log("removing", parsedKey);
 
     const fileDirectory = path.resolve(this.directory, parsedKey);
@@ -120,6 +148,8 @@ export class FileCacheDriver
       await removeDirectoryAsync(fileDirectory);
 
       this.log("removed", parsedKey);
+      // Emit removed event
+      await this.emit("removed", { key: parsedKey });
     } catch (error) {
       //
     }
@@ -138,6 +168,9 @@ export class FileCacheDriver
     }
 
     this.log("flushed");
+
+    // Emit flushed event
+    await this.emit("flushed");
   }
 
   /**
@@ -147,5 +180,6 @@ export class FileCacheDriver
     this.log("connecting");
     await ensureDirectoryAsync(this.directory);
     this.log("connected");
+    await this.emit("connected");
   }
 }

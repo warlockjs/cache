@@ -1,11 +1,11 @@
-import type { GenericObject } from "@mongez/reinforcements";
 import { rtrim } from "@mongez/reinforcements";
+import type { CacheKey } from "./types";
 
 /**
  * Make a proper key for the cache
  */
 export function parseCacheKey(
-  key: string | GenericObject,
+  key: CacheKey,
   options: { globalPrefix?: string | (() => string) } = {},
 ) {
   if (typeof key === "object") {
@@ -23,7 +23,7 @@ export function parseCacheKey(
   return String(cachePrefix ? rtrim(cachePrefix, ".") + "." + key : key);
 }
 
-export enum EXPIRES_AFTER {
+export enum CACHE_FOR {
   HALF_HOUR = 1800,
   ONE_HOUR = 3600,
   HALF_DAY = 43200,

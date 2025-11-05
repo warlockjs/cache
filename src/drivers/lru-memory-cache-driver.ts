@@ -1,15 +1,22 @@
-import type { GenericObject } from "@mongez/reinforcements";
-import type { CacheDriver, LRUMemoryCacheOptions } from "../types";
+import type { CacheDriver, CacheKey, LRUMemoryCacheOptions } from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
 
 class CacheNode {
   public next: CacheNode | null = null;
   public prev: CacheNode | null = null;
+  public expiresAt?: number;
   public constructor(
     public key: string,
     public value: any,
+    ttl?: number,
   ) {
-    //
+    if (ttl && ttl !== Infinity) {
+      this.expiresAt = Date.now() + ttl * 1000;
+    }
+  }
+
+  public get isExpired(): boolean {
+    return this.expiresAt !== undefined && this.expiresAt < Date.now();
   }
 }
 
@@ -44,12 +51,18 @@ export class LRUMemoryCacheDriver
   protected tail: CacheNode = new CacheNode("", null);
 
   /**
+   * Cleanup interval reference
+   */
+  protected cleanupInterval?: NodeJS.Timeout;
+
+  /**
    * {@inheritdoc}
    */
   public constructor() {
     super();
 
     this.init();
+    this.startCleanup();
   }
 
   /**
@@ -58,6 +71,41 @@ export class LRUMemoryCacheDriver
   public init() {
     this.head.next = this.tail;
     this.tail.prev = this.head;
+  }
+
+  /**
+   * Start the cleanup process for expired items
+   */
+  public startCleanup() {
+    // Clear existing interval if any
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+
+    this.cleanupInterval = setInterval(async () => {
+      const now = Date.now();
+      const expiredKeys: string[] = [];
+
+      for (const [key, node] of this.cache) {
+        if (node.expiresAt && node.expiresAt <= now) {
+          expiredKeys.push(key);
+        }
+      }
+
+      for (const key of expiredKeys) {
+        const node = this.cache.get(key);
+        if (node) {
+          this.removeNode(node);
+          this.cache.delete(key);
+          this.log("expired", key);
+          // Emit expired event
+          await this.emit("expired", { key });
+        }
+      }
+    }, 1000);
+
+    // do not block the process from exiting
+    this.cleanupInterval.unref();
   }
 
   /**
@@ -70,18 +118,28 @@ export class LRUMemoryCacheDriver
   /**
    * {@inheritdoc}
    */
-  public async set(key: string | GenericObject, value: any, _ttl?: number) {
-    key = await this.parseKey(key);
+  public async set(key: CacheKey, value: any, ttl?: number) {
+    key = this.parseKey(key);
 
     this.log("caching", key);
+
+    if (ttl === undefined) {
+      ttl = this.ttl;
+    }
 
     const existingNode = this.cache.get(key);
     if (existingNode) {
       existingNode.value = value;
+      // Update TTL
+      if (ttl && ttl !== Infinity) {
+        existingNode.expiresAt = Date.now() + ttl * 1000;
+      } else {
+        existingNode.expiresAt = undefined;
+      }
 
       this.moveHead(existingNode);
     } else {
-      const newNode = new CacheNode(key, value);
+      const newNode = new CacheNode(key, value, ttl);
 
       this.cache.set(key, newNode);
 
@@ -92,6 +150,9 @@ export class LRUMemoryCacheDriver
     }
 
     this.log("cached", key);
+
+    // Emit set event
+    await this.emit("set", { key, value, ttl });
 
     return this;
   }
@@ -136,8 +197,8 @@ export class LRUMemoryCacheDriver
   /**
    * {@inheritdoc}
    */
-  public async get(key: string | GenericObject) {
-    const parsedKey = await this.parseKey(key);
+  public async get(key: CacheKey) {
+    const parsedKey = this.parseKey(key);
 
     this.log("fetching", parsedKey);
 
@@ -145,6 +206,20 @@ export class LRUMemoryCacheDriver
 
     if (!node) {
       this.log("notFound", parsedKey);
+      // Emit miss event
+      await this.emit("miss", { key: parsedKey });
+      return null;
+    }
+
+    // Check if expired
+    if (node.isExpired) {
+      this.removeNode(node);
+      this.cache.delete(parsedKey);
+      this.log("expired", parsedKey);
+      // Emit expired event
+      await this.emit("expired", { key: parsedKey });
+      // Also emit miss since we're returning null
+      await this.emit("miss", { key: parsedKey });
       return null;
     }
 
@@ -152,14 +227,36 @@ export class LRUMemoryCacheDriver
 
     this.log("fetched", parsedKey);
 
-    return node.value;
+    const value = node.value;
+
+    // Apply cloning for immutability protection
+    if (value === null || value === undefined) {
+      return value;
+    }
+
+    const type = typeof value;
+    if (type === "string" || type === "number" || type === "boolean") {
+      // Emit hit event
+      await this.emit("hit", { key: parsedKey, value });
+      return value;
+    }
+
+    try {
+      const clonedValue = structuredClone(value);
+      // Emit hit event
+      await this.emit("hit", { key: parsedKey, value: clonedValue });
+      return clonedValue;
+    } catch (error) {
+      this.logError(`Failed to clone cached value for ${parsedKey}`, error);
+      throw error;
+    }
   }
 
   /**
    * {@inheritdoc}
    */
-  public async remove(key: string | GenericObject) {
-    const parsedKey = await this.parseKey(key);
+  public async remove(key: CacheKey) {
+    const parsedKey = this.parseKey(key);
 
     this.log("removing", parsedKey);
 
@@ -171,6 +268,9 @@ export class LRUMemoryCacheDriver
     }
 
     this.log("removed", parsedKey);
+
+    // Emit removed event
+    await this.emit("removed", { key: parsedKey });
   }
 
   /**
@@ -184,6 +284,9 @@ export class LRUMemoryCacheDriver
     this.init();
 
     this.log("flushed");
+
+    // Emit flushed event
+    await this.emit("flushed");
   }
 
   /**
@@ -191,5 +294,18 @@ export class LRUMemoryCacheDriver
    */
   public get capacity() {
     return this.options.capacity || 1000;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async disconnect() {
+    // Clear the cleanup interval to prevent memory leaks
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = undefined;
+    }
+
+    await super.disconnect();
   }
 }

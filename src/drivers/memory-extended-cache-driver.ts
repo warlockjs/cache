@@ -1,8 +1,8 @@
-import type { GenericObject } from "@mongez/reinforcements";
 import { get } from "@mongez/reinforcements";
 import type {
   CacheData,
   CacheDriver,
+  CacheKey,
   MemoryExtendedCacheOptions,
 } from "../types";
 import { MemoryCacheDriver } from "./memory-cache-driver";
@@ -19,8 +19,8 @@ export class MemoryExtendedCacheDriver
   /**
    * {@inheritdoc}
    */
-  public async get(key: string | GenericObject) {
-    const parsedKey = await this.parseKey(key);
+  public async get(key: CacheKey) {
+    const parsedKey = this.parseKey(key);
 
     this.log("fetching", parsedKey);
 
