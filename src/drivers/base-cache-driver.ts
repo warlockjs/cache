@@ -394,7 +394,12 @@ export abstract class BaseCacheDriver<
     try {
       return structuredClone(value);
     } catch (error) {
-      this.logError(`Failed to clone cached value for ${key}`, error);
+      console.log(value);
+
+      this.logError(
+        `Failed to clone cached value for ${key}, typeof value: ${typeof value}`,
+        error,
+      );
       throw error;
     }
   }
