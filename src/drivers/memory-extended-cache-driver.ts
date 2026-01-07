@@ -1,10 +1,5 @@
 import { get } from "@mongez/reinforcements";
-import type {
-  CacheData,
-  CacheDriver,
-  CacheKey,
-  MemoryExtendedCacheOptions,
-} from "../types";
+import type { CacheData, CacheDriver, CacheKey, MemoryExtendedCacheOptions } from "../types";
 import { MemoryCacheDriver } from "./memory-cache-driver";
 
 export class MemoryExtendedCacheDriver

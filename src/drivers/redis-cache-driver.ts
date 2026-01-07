@@ -1,5 +1,5 @@
 import { log } from "@warlock.js/logger";
-import { createClient } from "redis";
+import type { createClient } from "redis";
 import type { CacheDriver, CacheKey, RedisOptions } from "../types";
 import { CacheConfigurationError } from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
@@ -166,9 +166,7 @@ export class RedisCacheDriver
 
     if (options && !options.url && options.host) {
       const auth =
-        options.password || options.username
-          ? `${options.username}:${options.password}@`
-          : "";
+        options.password || options.username ? `${options.username}:${options.password}@` : "";
 
       if (!options.url) {
         const host = options.host || "localhost";
@@ -183,10 +181,11 @@ export class RedisCacheDriver
     };
 
     this.log("connecting");
+    const { createClient } = await import("redis");
 
     this.client = createClient(clientOptions);
 
-    this.client.on("error", error => {
+    this.client.on("error", (error: Error) => {
       this.log("error", error.message);
     });
     try {
@@ -256,11 +255,7 @@ export class RedisCacheDriver
    * Set if not exists (atomic operation)
    * Returns true if key was set, false if key already existed
    */
-  public async setNX(
-    key: CacheKey,
-    value: any,
-    ttl?: number,
-  ): Promise<boolean> {
+  public async setNX(key: CacheKey, value: any, ttl?: number): Promise<boolean> {
     const parsedKey = this.parseKey(key);
 
     this.log("caching", parsedKey);

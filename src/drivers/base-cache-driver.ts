@@ -1,4 +1,5 @@
 import { log } from "@warlock.js/logger";
+import { TaggedCache } from "../tagged-cache";
 import type {
   CacheData,
   CacheDriver,
@@ -33,8 +34,7 @@ const messages = {
 export abstract class BaseCacheDriver<
   ClientType,
   Options extends Record<string, any>,
-> implements CacheDriver<ClientType, Options>
-{
+> implements CacheDriver<ClientType, Options> {
   /**
    * CLient driver
    */
@@ -67,8 +67,7 @@ export abstract class BaseCacheDriver<
   /**
    * Event listeners storage
    */
-  protected eventListeners: Map<CacheEventType, Set<CacheEventHandler>> =
-    new Map();
+  protected eventListeners: Map<CacheEventType, Set<CacheEventHandler>> = new Map();
 
   /**
    * {@inheritdoc}
@@ -111,7 +110,7 @@ export abstract class BaseCacheDriver<
    * Register a one-time event listener
    */
   public once(event: CacheEventType, handler: CacheEventHandler): this {
-    const onceHandler: CacheEventHandler = async data => {
+    const onceHandler: CacheEventHandler = async (data) => {
       await handler(data);
       this.off(event, onceHandler);
     };
@@ -121,10 +120,7 @@ export abstract class BaseCacheDriver<
   /**
    * Emit an event to all registered listeners
    */
-  protected async emit(
-    event: CacheEventType,
-    data: Partial<CacheEventData> = {},
-  ): Promise<void> {
+  protected async emit(event: CacheEventType, data: Partial<CacheEventData> = {}): Promise<void> {
     const handlers = this.eventListeners.get(event);
     if (!handlers || handlers.size === 0) return;
 
@@ -194,11 +190,7 @@ export abstract class BaseCacheDriver<
   /**
    * {@inheritdoc}
    */
-  public async remember(
-    key: CacheKey,
-    ttl: number,
-    callback: () => Promise<any>,
-  ): Promise<any> {
+  public async remember(key: CacheKey, ttl: number, callback: () => Promise<any>): Promise<any> {
     const parsedKey = this.parseKey(key);
 
     // Check cache first
@@ -215,12 +207,12 @@ export abstract class BaseCacheDriver<
 
     // Create lock and compute value
     const promise = callback()
-      .then(async result => {
+      .then(async (result) => {
         await this.set(key, result, ttl);
         this.locks.delete(parsedKey);
         return result;
       })
-      .catch(err => {
+      .catch((err) => {
         this.locks.delete(parsedKey);
         throw err;
       });
@@ -256,9 +248,7 @@ export abstract class BaseCacheDriver<
     const current = (await this.get(key)) || 0;
 
     if (typeof current !== "number") {
-      throw new Error(
-        `Cannot increment non-numeric value for key: ${this.parseKey(key)}`,
-      );
+      throw new Error(`Cannot increment non-numeric value for key: ${this.parseKey(key)}`);
     }
 
     const newValue = current + value;
@@ -277,19 +267,14 @@ export abstract class BaseCacheDriver<
    * {@inheritdoc}
    */
   public async many(keys: CacheKey[]): Promise<any[]> {
-    return Promise.all(keys.map(key => this.get(key)));
+    return Promise.all(keys.map((key) => this.get(key)));
   }
 
   /**
    * {@inheritdoc}
    */
-  public async setMany(
-    items: Record<string, any>,
-    ttl?: number,
-  ): Promise<void> {
-    await Promise.all(
-      Object.entries(items).map(([key, value]) => this.set(key, value, ttl)),
-    );
+  public async setMany(items: Record<string, any>, ttl?: number): Promise<void> {
+    await Promise.all(Object.entries(items).map(([key, value]) => this.set(key, value, ttl)));
   }
 
   /**
@@ -318,11 +303,7 @@ export abstract class BaseCacheDriver<
       );
     }
 
-    log.info(
-      "cache:" + this.name,
-      operation,
-      (key ? key + " " : "") + messages[operation],
-    );
+    log.info("cache:" + this.name, operation, (key ? key + " " : "") + messages[operation]);
   }
 
   /**
@@ -425,9 +406,6 @@ export abstract class BaseCacheDriver<
    * Create a tagged cache instance for the given tags
    */
   public tags(tags: string[]): any {
-    // Lazy import to avoid circular dependency
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { TaggedCache } = require("../tagged-cache");
     return new TaggedCache(tags, this);
   }
 }
