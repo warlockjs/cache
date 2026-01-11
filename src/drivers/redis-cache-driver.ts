@@ -4,6 +4,50 @@ import type { CacheDriver, CacheKey, RedisOptions } from "../types";
 import { CacheConfigurationError } from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
 
+// ============================================================
+// Lazy-loaded Redis SDK Types
+// ============================================================
+
+/**
+ * Cached Redis module (loaded once, reused)
+ */
+let RedisClient: typeof import("redis");
+
+let isModuleExists: boolean | null = null;
+
+/**
+ * Installation instructions for Redis package
+ */
+const REDIS_INSTALL_INSTRUCTIONS = `
+Redis cache driver requires the redis package.
+Install it with:
+
+  npm install redis
+
+Or with your preferred package manager:
+
+  pnpm add redis
+  yarn add redis
+`.trim();
+
+/**
+ * Load Redis module
+ */
+async function loadRedis() {
+  try {
+    RedisClient = await import("redis");
+    isModuleExists = true;
+  } catch {
+    isModuleExists = false;
+  }
+}
+
+loadRedis();
+
+// ============================================================
+// RedisCacheDriver Class
+// ============================================================
+
 export class RedisCacheDriver
   extends BaseCacheDriver<ReturnType<typeof createClient>, RedisOptions>
   implements CacheDriver<ReturnType<typeof createClient>, RedisOptions>
@@ -162,6 +206,10 @@ export class RedisCacheDriver
   public async connect() {
     if (this.clientDriver) return;
 
+    if (!isModuleExists) {
+      throw new Error(REDIS_INSTALL_INSTRUCTIONS);
+    }
+
     const options = this.options;
 
     if (options && !options.url && options.host) {
@@ -181,7 +229,7 @@ export class RedisCacheDriver
     };
 
     this.log("connecting");
-    const { createClient } = await import("redis");
+    const { createClient } = RedisClient;
 
     this.client = createClient(clientOptions);
 
