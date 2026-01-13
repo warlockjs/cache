@@ -289,7 +289,7 @@ export abstract class BaseCacheDriver<
 
     if (operation == "notFound" || operation == "expired") {
       return log.warn(
-        "cache:" + this.name,
+        "cache." + this.name,
         operation,
         (key ? key + " " : "") + messages[operation],
       );
@@ -297,20 +297,20 @@ export abstract class BaseCacheDriver<
 
     if (operation.endsWith("ed")) {
       return log.success(
-        "cache:" + this.name,
+        "cache." + this.name,
         operation,
         (key ? key + " " : "") + messages[operation],
       );
     }
 
-    log.info("cache:" + this.name, operation, (key ? key + " " : "") + messages[operation]);
+    log.info("cache." + this.name, operation, (key ? key + " " : "") + messages[operation]);
   }
 
   /**
    * Log error message
    */
   protected logError(message: string, error?: any) {
-    log.error("cache:" + this.name, "error", message);
+    log.error("cache." + this.name, "error", message);
     if (error) {
       console.log(error);
     }
