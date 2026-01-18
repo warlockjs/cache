@@ -195,7 +195,7 @@ export abstract class BaseCacheDriver<
 
     // Check cache first
     const cachedValue = await this.get(key);
-    if (cachedValue !== null) {
+    if (cachedValue) {
       return cachedValue;
     }
 
