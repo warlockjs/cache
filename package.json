@@ -1,12 +1,12 @@
 {
     "name": "@warlock.js/cache",
-    "version": "4.0.130",
+    "version": "4.0.131",
     "description": "A Robust Cache Manager for Nodejs",
     "main": "./cjs/index.js",
     "dependencies": {
         "@mongez/fs": "^3.0.5",
         "@mongez/reinforcements": "^2.3.17",
-        "@warlock.js/logger": "4.0.130"
+        "@warlock.js/logger": "4.0.131"
     },
     "peerDependencies": {
         "redis": "^4.6.10 || ^5.0.0"
