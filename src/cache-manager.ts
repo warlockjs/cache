@@ -7,10 +7,7 @@ import type {
   DriverClass,
   TaggedCacheDriver,
 } from "./types";
-import {
-  CacheConfigurationError,
-  CacheDriverNotInitializedError,
-} from "./types";
+import { CacheConfigurationError, CacheDriverNotInitializedError } from "./types";
 
 export class CacheManager implements CacheDriver<any, any> {
   /**
@@ -34,8 +31,7 @@ export class CacheManager implements CacheDriver<any, any> {
   /**
    * Global event listeners
    */
-  protected globalEventListeners: Map<CacheEventType, Set<CacheEventHandler>> =
-    new Map();
+  protected globalEventListeners: Map<CacheEventType, Set<CacheEventHandler>> = new Map();
 
   /**
    * {@inheritdoc}
@@ -93,7 +89,7 @@ export class CacheManager implements CacheDriver<any, any> {
   /**
    * {@inheritdoc}
    */
-  public async get(key: CacheKey) {
+  public async get<T = any>(key: CacheKey): Promise<T | null> {
     this.ensureDriverInitialized();
     return this.currentDriver!.get(key);
   }
@@ -207,9 +203,7 @@ export class CacheManager implements CacheDriver<any, any> {
     const driverInstance = new Driver();
 
     driverInstance.setOptions(
-      this.configurations.options[
-        driver as keyof typeof this.configurations.options
-      ] || {},
+      this.configurations.options[driver as keyof typeof this.configurations.options] || {},
     );
 
     await driverInstance.connect();
@@ -226,8 +220,7 @@ export class CacheManager implements CacheDriver<any, any> {
    * Register and bind a driver
    */
   public registerDriver(driverName: string, driverClass: DriverClass) {
-    (this.configurations.drivers as Record<string, DriverClass>)[driverName] =
-      driverClass;
+    (this.configurations.drivers as Record<string, DriverClass>)[driverName] = driverClass;
   }
 
   /**
@@ -250,11 +243,7 @@ export class CacheManager implements CacheDriver<any, any> {
   /**
    * {@inheritdoc}
    */
-  public async remember(
-    key: CacheKey,
-    ttl: number,
-    callback: () => Promise<any>,
-  ): Promise<any> {
+  public async remember(key: CacheKey, ttl: number, callback: () => Promise<any>): Promise<any> {
     this.ensureDriverInitialized();
     return this.currentDriver!.remember(key, ttl, callback);
   }
@@ -302,10 +291,7 @@ export class CacheManager implements CacheDriver<any, any> {
   /**
    * {@inheritdoc}
    */
-  public async setMany(
-    items: Record<string, any>,
-    ttl?: number,
-  ): Promise<void> {
+  public async setMany(items: Record<string, any>, ttl?: number): Promise<void> {
     this.ensureDriverInitialized();
     return this.currentDriver!.setMany(items, ttl);
   }
@@ -358,7 +344,7 @@ export class CacheManager implements CacheDriver<any, any> {
    * Register a one-time global event listener
    */
   public once(event: CacheEventType, handler: CacheEventHandler): this {
-    const onceHandler: CacheEventHandler = async data => {
+    const onceHandler: CacheEventHandler = async (data) => {
       await handler(data);
       this.off(event, onceHandler);
     };
@@ -381,11 +367,7 @@ export class CacheManager implements CacheDriver<any, any> {
    * Returns true if key was set, false if key already existed
    * Note: Only supported by drivers that implement setNX (e.g., Redis)
    */
-  public async setNX(
-    key: CacheKey,
-    value: any,
-    ttl?: number,
-  ): Promise<boolean> {
+  public async setNX(key: CacheKey, value: any, ttl?: number): Promise<boolean> {
     this.ensureDriverInitialized();
 
     if (!this.currentDriver!.setNX) {

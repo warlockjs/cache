@@ -123,9 +123,7 @@ export type CacheEventData = {
 /**
  * Event handler function type
  */
-export type CacheEventHandler = (
-  eventData: CacheEventData,
-) => void | Promise<void>;
+export type CacheEventHandler = (eventData: CacheEventData) => void | Promise<void>;
 
 /**
  * Tagged cache interface for working with cache tags
@@ -159,11 +157,7 @@ export interface TaggedCacheDriver {
   /**
    * Remember pattern with tags
    */
-  remember(
-    key: CacheKey,
-    ttl: number,
-    callback: () => Promise<any>,
-  ): Promise<any>;
+  remember(key: CacheKey, ttl: number, callback: () => Promise<any>): Promise<any>;
   /**
    * Pull value with tags
    */
@@ -313,7 +307,7 @@ export interface CacheDriver<ClientType, Options> {
   /**
    * Get a value from the cache
    */
-  get(key: CacheKey): Promise<any | null>;
+  get<T = any>(key: CacheKey): Promise<T | null>;
   /**
    * Remove a value from the cache
    */
@@ -345,19 +339,15 @@ export interface CacheDriver<ClientType, Options> {
    * @param ttl Time to live in seconds
    * @param callback Function to execute if cache miss
    */
-  remember(
-    key: CacheKey,
-    ttl: number,
-    callback: () => Promise<any>,
-  ): Promise<any>;
+  remember<T = any>(key: CacheKey, ttl: number, callback: () => Promise<T>): Promise<T>;
   /**
    * Get value and remove it from cache (atomic operation)
    */
-  pull(key: CacheKey): Promise<any | null>;
+  pull<T = any>(key: CacheKey): Promise<T | null>;
   /**
    * Set a value in cache permanently (no expiration)
    */
-  forever(key: CacheKey, value: any): Promise<any>;
+  forever<T = any>(key: CacheKey, value: T): Promise<T>;
   /**
    * Increment a numeric value in cache
    *
@@ -421,17 +411,9 @@ export type CacheData = {
 
 export type DriverClass = new () => CacheDriver<any, any>;
 
-type DefaultDrivers =
-  | "redis"
-  | "file"
-  | "memory"
-  | "memoryExtended"
-  | "null"
-  | "lru";
+type DefaultDrivers = "redis" | "file" | "memory" | "memoryExtended" | "null" | "lru";
 
-type MergeWithDefaultDrivers<T> = T extends undefined
-  ? DefaultDrivers
-  : DefaultDrivers | T;
+type MergeWithDefaultDrivers<T> = T extends undefined ? DefaultDrivers : DefaultDrivers | T;
 
 export type CacheConfigurations<
   T extends string | undefined = undefined,
