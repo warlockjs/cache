@@ -41,10 +41,24 @@ export abstract class BaseCacheDriver<
   protected clientDriver!: ClientType;
 
   /**
+   * Determine whether to log or not
+   */
+  protected shouldLog: boolean = true;
+
+  /**
    * {@inheritdoc}
    */
   public get client() {
     return (this.clientDriver || this) as unknown as ClientType;
+  }
+
+  /**
+   * Set logging state
+   */
+  public setLoggingState(shouldLog: boolean) {
+    this.shouldLog = shouldLog;
+
+    return this;
   }
 
   /**
@@ -281,6 +295,8 @@ export abstract class BaseCacheDriver<
    * Log the operation
    */
   protected log(operation: CacheOperationType, key?: string) {
+    if (!this.shouldLog) return;
+
     if (key) {
       // this will be likely used with file cache driver as it will convert the dot to slash
       // to make it consistent and not to confuse developers we will output the key by making sure it's a dot

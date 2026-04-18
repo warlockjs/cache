@@ -52,6 +52,16 @@ export class CacheManager implements CacheDriver<any, any> {
     this.configurations.default = configurations.default;
     this.configurations.drivers = configurations.drivers;
     this.configurations.options = configurations.options;
+    this.configurations.logging = configurations.logging;
+  }
+
+  /**
+   * Set logging state
+   */
+  public setLoggingState(loggingState: boolean) {
+    this.ensureDriverInitialized();
+
+    this.currentDriver!.setLoggingState(loggingState);
   }
 
   /**
@@ -72,6 +82,10 @@ export class CacheManager implements CacheDriver<any, any> {
 
     // Attach global listeners to the new driver
     this.attachGlobalListeners(driver);
+
+    if (this.configurations.logging !== undefined) {
+      driver.setLoggingState(this.configurations.logging);
+    }
 
     this.currentDriver = driver;
     return this;

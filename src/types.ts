@@ -285,6 +285,10 @@ export interface CacheDriver<ClientType, Options> {
    */
   name: string;
   /**
+   * Set logging state
+   */
+  setLoggingState(shouldLog: boolean): any;
+  /**
    *  Remove all cached items by namespace
    */
   removeNamespace(namespace: string): Promise<any>;
@@ -423,6 +427,12 @@ export type CacheConfigurations<
    * The default cache driver name
    */
   default?: DriverName;
+  /**
+   * Determine whether to log or not
+   *
+   * @default true
+   */
+  logging?: boolean;
   /**
    * The cache drivers list
    */
