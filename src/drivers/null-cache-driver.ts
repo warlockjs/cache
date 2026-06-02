@@ -1,6 +1,12 @@
 import type { GenericObject } from "@mongez/reinforcements";
 import { log } from "@warlock.js/logger";
-import type { CacheDriver, CacheKey, NullCacheDriverOptions } from "../types";
+import type {
+  CacheDriver,
+  CacheKey,
+  CacheSetOptions,
+  CacheTtl,
+  NullCacheDriverOptions,
+} from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
 
 export class NullCacheDriver
@@ -66,7 +72,11 @@ export class NullCacheDriver
   /**
    * {@inheritdoc}
    */
-  public async set(key: CacheKey, _value: any) {
+  public async set(
+    key: CacheKey,
+    _value: any,
+    _ttlOrOptions?: CacheTtl | CacheSetOptions,
+  ): Promise<any> {
     log.info("cache", "setting key", key);
 
     log.success("cache", "key set", key);
@@ -101,6 +111,16 @@ export class NullCacheDriver
     log.info("cache", "flushing", "all");
 
     log.success("cache", "flushed", "all");
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * The null driver is a black-hole — `similar()` mirrors `get()` and returns
+   * an empty result set rather than throwing.
+   */
+  public async similar(): Promise<any[]> {
+    return [];
   }
 
   /**

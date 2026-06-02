@@ -1,0 +1,2071 @@
+# Warlock Cache — full skills
+
+> Package: `@warlock.js/cache`
+
+> Generated artifact. Concatenates every SKILL.md and reference file under `@warlock.js/cache/skills/`. Re-run `node scripts/generate-llms.mjs` after any change.
+
+## apply-cache-patterns  `@warlock.js/cache/apply-cache-patterns/SKILL.md`
+
+---
+name: apply-cache-patterns
+description: 'Compose cache primitives into real-world patterns — remember() memoization, cross-node stampede protection via a distributed lock (onConflict: ''create''), negative caching, and per-tenant scoping. Triggers: `cache.remember`, `cache.set` with `onConflict: "create"`, `globalPrefix`; "memoize this function", "prevent cache stampede across nodes", "cache not-found results", "per-tenant cache scoping"; typical import `import { cache } from "@warlock.js/cache"`. Skip: counters — `@warlock.js/cache/use-cache-atomic/SKILL.md`; bulk get/set — `@warlock.js/cache/use-cache-bulk/SKILL.md`; TTL constants/utilities — `@warlock.js/cache/use-cache-utils/SKILL.md`; named lock wrapper — `@warlock.js/cache/use-cache-lock/SKILL.md`; SWR — `@warlock.js/cache/use-swr/SKILL.md`; competing libs `lru-cache`, `node-cache`, `keyv`.'
+---
+
+# Real-world caching patterns
+
+Common shapes — the "general patterns" file. Specialized topics have dedicated skills: [`use-cache-tags`](@warlock.js/cache/use-cache-tags/SKILL.md), [`use-cache-namespace`](@warlock.js/cache/use-cache-namespace/SKILL.md), [`use-swr`](@warlock.js/cache/use-swr/SKILL.md), [`use-cache-lock`](@warlock.js/cache/use-cache-lock/SKILL.md), [`use-cache-list`](@warlock.js/cache/use-cache-list/SKILL.md).
+
+## Memoize an expensive function — `remember`
+
+```ts
+const user = await cache.remember(`user:${id}`, "1h", async () => {
+  return db.users.find(id);   // runs only on cache miss
+});
+```
+
+- The callback runs once per miss.
+- Concurrent callers for the same key share the in-flight promise (stampede protection) — within one Node process.
+- `null` is the universal miss sentinel. `remember` short-circuits on a **truthy** cached value (`if (cachedValue) return cachedValue;`), so a stored `null` reads back as a miss and the callback **re-runs on every call** — you get no caching at all, plus a wasted write each time. To actually cache a "not found," store a truthy sentinel instead (see negative caching below).
+
+## Cross-process stampede protection — distributed lock via `onConflict`
+
+`remember`'s lock is per-process. For cross-node safety, acquire a short-lived distributed lock before doing expensive work:
+
+```ts
+const lockKey = `lock:build-report:${reportId}`;
+const acquired = await cache.set(lockKey, process.pid, {
+  onConflict: "create",
+  ttl: "2m",
+});
+
+if (!acquired.wasSet) {
+  // another node is already building — wait or skip
+  return cache.get(`report:${reportId}`);
+}
+
+try {
+  const report = await buildExpensiveReport(reportId);
+  await cache.set(`report:${reportId}`, report, "1h");
+  return report;
+} finally {
+  await cache.remove(lockKey);
+}
+```
+
+This requires a driver with atomic `SET NX` — Redis is native, memory/LRU/file emulate (single-process only). For a higher-level wrapper that does the lock-and-release for you, see [`@warlock.js/cache/use-cache-lock/SKILL.md`](@warlock.js/cache/use-cache-lock/SKILL.md).
+
+## Negative caching
+
+Cache "not found" results with a shorter TTL to avoid hammering the origin:
+
+```ts
+const user = await cache.remember(`user:${id}`, "5m", async () => {
+  const found = await db.users.find(id);
+  return found ?? { __miss: true };
+});
+
+if (user?.__miss) {
+  return null;
+}
+```
+
+Don't return raw `null` inside `remember` to "cache the miss" — it won't. `remember`'s truthy guard treats a stored `null` as a miss, so the callback re-runs every time and the origin still gets hammered. The truthy `{ __miss: true }` sentinel is what actually skips the next call.
+
+## Per-tenant caching
+
+```ts
+// In cache config:
+options: {
+  redis: {
+    url: "...",
+    globalPrefix: () => `tenant-${currentContext.tenantId}`,
+  },
+}
+
+// At the call site — no tenancy awareness needed:
+await cache.set("user:1", user, "1h");
+// Actual key: "tenant-42.user.1"
+```
+
+Clear a tenant out:
+```ts
+await cache.removeNamespace("");   // when globalPrefix is set, flush scopes to it
+// or
+await cache.tags([`tenant-${tenantId}`]).invalidate();
+```
+
+## See also
+
+- [`@warlock.js/cache/use-cache-atomic/SKILL.md`](@warlock.js/cache/use-cache-atomic/SKILL.md) — `increment` / `decrement` counters
+- [`@warlock.js/cache/use-cache-bulk/SKILL.md`](@warlock.js/cache/use-cache-bulk/SKILL.md) — `many` / `setMany`
+- [`@warlock.js/cache/use-cache-utils/SKILL.md`](@warlock.js/cache/use-cache-utils/SKILL.md) — `CACHE_FOR` constants and TTL/key helpers
+- [`@warlock.js/cache/use-cache-tags/SKILL.md`](@warlock.js/cache/use-cache-tags/SKILL.md) — tag-based invalidation
+- [`@warlock.js/cache/use-cache-namespace/SKILL.md`](@warlock.js/cache/use-cache-namespace/SKILL.md) — scoped handles and `removeNamespace`
+- [`@warlock.js/cache/use-swr/SKILL.md`](@warlock.js/cache/use-swr/SKILL.md) — stale-while-revalidate for slow upstreams
+- [`@warlock.js/cache/use-cached-hof/SKILL.md`](@warlock.js/cache/use-cached-hof/SKILL.md) — `cached()` HOF for declarative memoization
+
+
+## cache-basics  `@warlock.js/cache/cache-basics/SKILL.md`
+
+---
+name: cache-basics
+description: 'Start with @warlock.js/cache — the cache singleton, primary ops (set / get / pull / remove / many / forever / increment / remember), TTL shapes, init flow. Triggers: `cache`, `cache.setCacheConfigurations`, `cache.init`, `cache.set`, `cache.get`, `cache.remove`, `cache.remember`, `cache.flush`; "start with warlock cache", "wire up cache at startup", "which cache skill do I need"; typical import `import { cache } from "@warlock.js/cache"`. Skip: driver choice — `@warlock.js/cache/pick-cache-driver/SKILL.md`; set options — `@warlock.js/cache/configure-set-options/SKILL.md`; competing libs `lru-cache`, `node-cache`, `keyv`; native `Map`.'
+---
+
+# Cache basics
+
+Unified cache manager with 8 built-in drivers (memory / memoryExtended / LRU / file / null / redis / pg / mock), tag-based invalidation, list sub-API, atomic `update`/`merge`, similarity retrieval, scoped namespace handles, and a rich `set` options object. The same surface across drivers — switch via config, not call sites.
+
+> This skill is the cache **map** — read it first, then load the specific skill for the task.
+
+## Install
+
+```bash
+yarn add @warlock.js/cache
+```
+
+## Foundations
+
+The 10 things that are true in every cache use:
+
+1. **Public API is the `cache` singleton** (`import { cache } from "@warlock.js/cache"`). No `new CacheManager()` for consumers.
+2. **Every data op runs against the currently selected driver.** Switch via `cache.use("name")` or use a per-call override: `cache.set(k, v, { driver: "redis" })`.
+3. **Consumers never `await connect()` directly.** `cache.init()` does that once at startup after `cache.setCacheConfigurations(...)`. For drivers needing runtime-built options (e.g. `pg`'s `client: pg.Pool`), skip `init()` and call `cache.use("pg", { client: pool })`.
+4. **TTL accepts three shapes at the call site**: `number` (seconds), `string` (`"1h"`, `"30m"`, `"7d"` — parsed via `ms`), or a full `CacheSetOptions` object. See [`@warlock.js/cache/configure-set-options/SKILL.md`](@warlock.js/cache/configure-set-options/SKILL.md).
+5. **`update` and `merge` throw `CacheUnsupportedError` on the file driver.** Use memory or redis for atomic mutation. See [`@warlock.js/cache/use-cache-update-merge/SKILL.md`](@warlock.js/cache/use-cache-update-merge/SKILL.md).
+6. **The value you read is a deep clone.** `structuredClone` protects the cache from accidental mutation of returned objects.
+7. **`remember()` is stampede-safe within a single process.** Cross-process safety requires `onConflict: "create"` plus TTL (Redis-native). For slow upstreams where slightly-stale data is acceptable, prefer `cache.swr(...)` — see [`@warlock.js/cache/use-swr/SKILL.md`](@warlock.js/cache/use-swr/SKILL.md).
+8. **`cache.metrics()` returns a running snapshot** — counters, hit rate, latency percentiles, per-driver breakdowns. Lazy: collector attaches on first call so apps that never read metrics pay zero cost.
+9. **`cache.namespace(prefix, options?)` returns a scoped handle** — every key auto-prefixed, scope-level `ttl` / `tags` defaults. See [`@warlock.js/cache/use-cache-namespace/SKILL.md`](@warlock.js/cache/use-cache-namespace/SKILL.md).
+10. **Similarity retrieval** lives on the same driver contract — `set(k, v, { vector })` indexes the entry; `cache.similar(vec, ...)` returns nearest hits. See [`@warlock.js/cache/use-cache-similarity/SKILL.md`](@warlock.js/cache/use-cache-similarity/SKILL.md).
+
+## Minimal startup
+
+```ts
+import {
+  cache,
+  MemoryCacheDriver,
+  RedisCacheDriver,
+  type CacheConfigurations,
+} from "@warlock.js/cache";
+
+const config: CacheConfigurations = {
+  default: "redis",
+  logging: false,
+  drivers: {
+    memory: MemoryCacheDriver,
+    redis: RedisCacheDriver,
+  },
+  options: {
+    memory: { ttl: "1h" },
+    redis: { url: "redis://localhost:6379", ttl: "7d" },
+  },
+};
+
+cache.setCacheConfigurations(config);
+await cache.init();
+```
+
+## Primary ops
+
+```ts
+// Set + get
+await cache.set("user.1", user, "1h");
+const cached = await cache.get<User>("user.1");       // User | null
+
+// Presence + read-and-delete
+const exists = await cache.has("user.1");             // boolean
+const taken = await cache.pull<User>("user.1");        // returns then removes
+
+// Remove + flush
+await cache.remove("user.1");
+await cache.flush();                                   // wipe everything (current driver)
+
+// Many at once — array positionally aligned with the keys (null for misses)
+const [u1, u2, u3] = await cache.many(["user.1", "user.2", "user.3"]);
+// → (User | null)[]
+
+// No-TTL writes
+await cache.forever("config.version", "1.2.3");
+
+// Counters
+await cache.increment("post.42.views");                // +1, returns new value
+await cache.increment("post.42.views", 10);            // +10
+await cache.decrement("inventory.sku-x");              // -1
+
+// Memoize an expensive function
+const user = await cache.remember("user.1", "1h", async () => db.users.find(1));
+```
+
+## Pick a skill
+
+| If the task is about… | Load |
+| --- | --- |
+| Choosing a driver, configuring it, or understanding what each one does best | [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md) |
+| The `set` options object (`ttl`, `expiresAt`, `tags`, `onConflict`, `driver`, `vector`) | [`@warlock.js/cache/configure-set-options/SKILL.md`](@warlock.js/cache/configure-set-options/SKILL.md) |
+| Memoization with `remember()`, counters, negative caching, per-tenant scoping, TTL constants | [`@warlock.js/cache/apply-cache-patterns/SKILL.md`](@warlock.js/cache/apply-cache-patterns/SKILL.md) |
+| Scoped handles via `cache.namespace(prefix, options?)` | [`@warlock.js/cache/use-cache-namespace/SKILL.md`](@warlock.js/cache/use-cache-namespace/SKILL.md) |
+| Tag-based invalidation — `cache.tags([...]).invalidate()` | [`@warlock.js/cache/use-cache-tags/SKILL.md`](@warlock.js/cache/use-cache-tags/SKILL.md) |
+| Stale-while-revalidate — `cache.swr(...)` | [`@warlock.js/cache/use-swr/SKILL.md`](@warlock.js/cache/use-swr/SKILL.md) |
+| Wrapping a function with `cached()` — HOF memoization with `.invalidate()` | [`@warlock.js/cache/use-cached-hof/SKILL.md`](@warlock.js/cache/use-cached-hof/SKILL.md) |
+| Distributed locks — `cache.lock(key, ttl, fn)` with auto-release | [`@warlock.js/cache/use-cache-lock/SKILL.md`](@warlock.js/cache/use-cache-lock/SKILL.md) |
+| Queues, recent-N buffers, `push`/`shift`/`trim` — the list sub-API | [`@warlock.js/cache/use-cache-list/SKILL.md`](@warlock.js/cache/use-cache-list/SKILL.md) |
+| Atomic read-modify-write via `update()` and `merge()` | [`@warlock.js/cache/use-cache-update-merge/SKILL.md`](@warlock.js/cache/use-cache-update-merge/SKILL.md) |
+| Similarity retrieval — `set({ vector })` + `cache.similar(...)` | [`@warlock.js/cache/use-cache-similarity/SKILL.md`](@warlock.js/cache/use-cache-similarity/SKILL.md) |
+| Postgres driver setup (KV-only or with pgvector) | [`@warlock.js/cache/configure-pg-cache/SKILL.md`](@warlock.js/cache/configure-pg-cache/SKILL.md) |
+| `cache.metrics()` aggregate snapshot + event bus for per-event reactions | [`@warlock.js/cache/observe-cache/SKILL.md`](@warlock.js/cache/observe-cache/SKILL.md) |
+| Error classes (`CacheConfigurationError`, `CacheUnsupportedError`, etc.) | [`@warlock.js/cache/handle-cache-errors/SKILL.md`](@warlock.js/cache/handle-cache-errors/SKILL.md) |
+| Tests that touch cache code paths — `MockCacheDriver`, `MemoryCacheDriver` | [`@warlock.js/cache/test-cache-code/SKILL.md`](@warlock.js/cache/test-cache-code/SKILL.md) |
+
+## Things NOT to do
+
+- Don't call `new RedisCacheDriver()` directly in app code — register it in the configuration and let the manager load it.
+- Don't store un-serializable values (functions, symbols, class instances with methods) on the `redis` or `file` drivers — they JSON-roundtrip.
+- Don't rely on `remember()` for cross-process stampede protection. It only serializes within one Node process.
+- Don't mix `ttl` and `expiresAt` in the same `set` call — it throws `CacheConfigurationError`.
+- Don't call `update()` / `merge()` on the file driver — it throws.
+- Don't assume `setNX` is available on every driver — prefer `onConflict: "create"` which works everywhere.
+- Don't run `cache.similar()` against memory drivers in production with large datasets — O(N) brute force.
+- Don't auto-migrate the `pg` table from app code. The driver exposes `driver.schema()` returning DDL.
+- Don't switch embedders without re-embedding the entire vector index.
+
+
+## configure-pg-cache  `@warlock.js/cache/configure-pg-cache/SKILL.md`
+
+---
+name: configure-pg-cache
+description: 'Postgres cache driver setup — KV-only mode (default) or pgvector mode (opt in via options.pg.vector). Caller owns the pg.Pool, driver exposes driver.schema() for one-time DDL. Triggers: `PgCacheDriver`, `driver.schema`, `options.pg.vector`, `pg.Pool`, `hnsw`, `ivfflat`; "use Postgres as cache backend", "set up pgvector semantic cache", "DDL for warlock cache table"; typical import `import { cache, PgCacheDriver } from "@warlock.js/cache"`. Skip: cross-driver similarity API — `@warlock.js/cache/use-cache-similarity/SKILL.md`; driver picker — `@warlock.js/cache/pick-cache-driver/SKILL.md`; competing libs `pg-mem`; raw `pg` / `node-postgres`.'
+---
+
+# `pg` cache driver — Postgres setup
+
+Persistent cache backed by your existing Postgres pool. Two modes: **KV-only** (default) or **pgvector** (opt in via `options.pg.vector`). Same driver, same API — flip a config flag.
+
+## Always-true facts
+
+1. **Caller owns the connection.** Pass an already-built `pg.Pool` (or `Client`) via `options.pg.client`. The driver never closes it on `cache.disconnect()` — your pool stays usable everywhere else.
+2. **`pg` is an optional peer dep.** Lazy-loaded; install only if you use this driver.
+3. **No auto-migration.** Driver exposes `driver.schema()` returning a DDL string — caller runs it via their own migration tool.
+4. **Table name is regex-validated** (`[A-Za-z_][A-Za-z0-9_]*`) before DDL interpolation. No SQL injection via misconfiguration.
+5. **TTL is lazy on read.** `SELECT ... WHERE expires_at IS NULL OR expires_at > now()`. Expired rows aren't auto-deleted unless you GC them yourself.
+6. **`onConflict` is race-safe at the SQL layer:**
+   - `create` → `INSERT ... ON CONFLICT DO UPDATE WHERE expires_at < now() RETURNING value` (reclaims expired rows; blocks live ones).
+   - `update` → `UPDATE ... WHERE expires_at IS NULL OR expires_at > now() RETURNING value`.
+   - `upsert` → unconditional `INSERT ... ON CONFLICT DO UPDATE`.
+7. **`stale_at TIMESTAMPTZ` column** powers [stale-while-revalidate](@warlock.js/cache/use-swr/SKILL.md) — `cache.swr(...)` populates it on writes, plain `set()` leaves it null (always-fresh). Provision via `driver.schema()` like any other column.
+8. **pgvector requires `CREATE EXTENSION vector;` once on the database.** Lazy probe on first vector op throws `CacheConfigurationError` if missing; result is cached.
+9. **Vectors are passed as text literals** (`'[1,2,3]'::vector`). No binary protocol dependency — works against any pg client.
+
+## Configuration
+
+### KV-only
+
+```ts
+import { Pool } from "pg";
+import { cache, PgCacheDriver } from "@warlock.js/cache";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+cache.setCacheConfigurations({
+  default: "pg",
+  drivers: { pg: PgCacheDriver },
+  options: {
+    pg: {
+      client: pool,
+      table: "warlock_cache",     // optional, default
+      ttl: "1h",                  // optional default
+      globalPrefix: "prod-app",
+    },
+  },
+});
+await cache.init();
+```
+
+When the pool isn't available at config time (lazy bootstrap, per-tenant pools, test swapping), drop `client` from the static block and inject it at use-time: `cache.use("pg", { client: pool })`. Runtime options merge over static per-key, runtime wins. Re-calling with new options throws — register a second driver name for a second config.
+
+### pgvector mode
+
+Same driver — add the `vector` block:
+
+```ts
+options: {
+  pg: {
+    client: pool,
+    vector: {
+      dimensions: 1536,           // must match your embedder
+      index: "hnsw",              // or "ivfflat"; default "hnsw"
+    },
+  },
+},
+```
+
+## One-time schema setup
+
+```ts
+await pool.query(driver.schema());
+// CREATE TABLE IF NOT EXISTS warlock_cache (
+//   key TEXT PRIMARY KEY,
+//   value JSONB NOT NULL,
+//   expires_at TIMESTAMPTZ,
+//   stale_at TIMESTAMPTZ,
+//   tags TEXT[] NOT NULL DEFAULT '{}'::TEXT[],
+//   embedding VECTOR(1536)         -- only when vector config is set
+// );
+// CREATE INDEX IF NOT EXISTS idx_warlock_cache_expires_at ...
+// CREATE INDEX IF NOT EXISTS idx_warlock_cache_tags ... USING GIN (tags);
+// CREATE INDEX IF NOT EXISTS idx_warlock_cache_embedding ... USING hnsw (embedding vector_cosine_ops);
+```
+
+Pipe this through whichever migration tool you use (Knex, Prisma, plain SQL files, Atlas).
+
+## Index strategies (pgvector)
+
+- `hnsw` (default) — faster query, slower build, larger on disk. The right default.
+- `ivfflat` — faster build, slightly slower query. Useful for bulk ingest then static reads.
+
+Switching strategies requires rebuilding the index.
+
+## Errors you'll surface
+
+- `CacheConfigurationError: requires a 'client' option` — forgot to pass the pool.
+- `CacheConfigurationError: invalid table name` — non-`[A-Za-z_][A-Za-z0-9_]*` characters in `options.pg.table`.
+- `CacheConfigurationError: pgvector extension not installed` — run `CREATE EXTENSION vector;` once on the DB, or remove the `vector` block.
+- `CacheConfigurationError: vector dimension mismatch` — input vector length ≠ configured dimensions. Embedder probably changed.
+- `CacheUnsupportedError: similarity retrieval requires the 'vector' config block` — KV-only mode; add `options.pg.vector`.
+
+See [`@warlock.js/cache/handle-cache-errors/SKILL.md`](@warlock.js/cache/handle-cache-errors/SKILL.md) for the full error class hierarchy.
+
+## Things NOT to do
+
+- Don't auto-run `driver.schema()` from app code — it's a one-time migration. Run it through your migration pipeline.
+- Don't share the driver's pool with the connection-eager `pg.Client` form for long-running apps — use `pg.Pool`.
+- Don't expect the driver to close your pool. `cache.disconnect()` deliberately leaves it open. Close the pool yourself when shutting down.
+- Don't switch embedders without re-embedding the index. Vectors aren't portable across models.
+- Don't put the `pg` driver behind a connection-string the cache itself manages — pass the pool you already built for the rest of the app.
+
+## Related
+
+- [`@warlock.js/cache/use-cache-similarity/SKILL.md`](@warlock.js/cache/use-cache-similarity/SKILL.md) — the `similar()` API across all drivers
+- [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md) — comparing pg with memory / redis / file
+
+
+## configure-set-options  `@warlock.js/cache/configure-set-options/SKILL.md`
+
+---
+name: configure-set-options
+description: 'Configure cache.set''s third argument — ttl, expiresAt, tags, onConflict (create / update / upsert), driver, vector. Triggers: `cache.set`, `ttl`, `expiresAt`, `tags`, `onConflict`, `driver`, `vector`, `CacheSetResult`, `wasSet`; "set a key only if missing", "set with absolute deadline", "attach tags inline", "route one cache call to redis"; typical import `import { cache } from "@warlock.js/cache"`. Skip: tag fluent API — `@warlock.js/cache/use-cache-tags/SKILL.md`; vector queries — `@warlock.js/cache/use-cache-similarity/SKILL.md`; competing libs `keyv`, `ioredis`.'
+---
+
+# The `set` options object
+
+`cache.set(key, value, ttlOrOptions?)` — the 3rd argument accepts three shapes.
+
+## The three shapes
+
+```ts
+// 1. Number — seconds
+await cache.set("name", "Jane", 600);
+
+// 2. String — human-readable duration, parsed via `ms`
+await cache.set("name", "Jane", "10m");   // "1s", "30m", "1h", "7d", "2 weeks"
+
+// 3. Options object
+await cache.set("user:1", user, {
+  ttl: "1h",
+  expiresAt: new Date("2026-12-31"),
+  tags: ["users"],
+  onConflict: "create",
+  driver: "redis",
+});
+```
+
+## Option keys
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `ttl` | `number \| string` | Relative expiry. Mutually exclusive with `expiresAt`. |
+| `expiresAt` | `number \| Date` | Absolute deadline (epoch ms or Date). Must be in the future. Mutually exclusive with `ttl`. |
+| `tags` | `string[]` | Inline equivalent of `cache.tags([...]).set(...)`. See [`@warlock.js/cache/use-cache-tags/SKILL.md`](@warlock.js/cache/use-cache-tags/SKILL.md). |
+| `onConflict` | `"create" \| "update" \| "upsert"` | See below. Default `"upsert"`. |
+| `driver` | `string` | Per-call driver override by registered name. |
+| `vector` | `number[]` | Embedding indexed alongside the entry for [`cache.similar()`](@warlock.js/cache/use-cache-similarity/SKILL.md). Drivers without similarity support throw `CacheUnsupportedError`. |
+
+## `onConflict` policies
+
+Self-documenting enum; Redis maps these to `NX` / `XX` natively, others emulate.
+
+```ts
+// create — set only if key is missing
+const result = await cache.set("lock:jobs:import", workerId, {
+  onConflict: "create",
+  ttl: "5m",
+});
+// result: { wasSet: true, existing: null } on acquire
+//         { wasSet: false, existing: <prior workerId> } on conflict — someone else holds the lock
+
+if (!result.wasSet) {
+  // another worker is already running; abort.
+}
+
+// update — set only if key exists (don't resurrect expired sessions)
+await cache.set("session:abc", session, { onConflict: "update" });
+```
+
+Conditional writes (`"create"` / `"update"`) return a `CacheSetResult`; unconditional `"upsert"` returns the value or driver instance as before.
+
+## Mutually-exclusive validations
+
+Both of these throw `CacheConfigurationError`:
+
+```ts
+await cache.set("k", v, { ttl: "1h", expiresAt: Date.now() + 1000 });  // both set
+await cache.set("k", v, { expiresAt: Date.now() - 1000 });              // past deadline
+```
+
+## Inline tags vs `cache.tags([...]).set(...)`
+
+Both work; inline is terser when you're writing one value under known tags:
+
+```ts
+// Inline
+await cache.set("user:1", user, { tags: ["users", "tenant-42"] });
+
+// Fluent (useful when you already have a tagged instance)
+const users = cache.tags(["users"]);
+await users.set("user:1", user);
+await users.invalidate();   // drops every key tagged "users"
+```
+
+Inline tag semantics are **additive**, never replace. A subsequent `set("user:1", ...)` with no `tags` leaves previous associations intact (the tag index still points to the key), and a `set(..., { tags: [...] })` only appends the key to those tags' index entries — it never removes the key from tags it was bound to earlier. To drop stale bindings, invalidate the old tag explicitly via `cache.tags([...]).invalidate()`.
+
+## Back-compat note
+
+Every call site using the old positional-TTL shape keeps working:
+
+```ts
+await cache.set("k", v);           // no TTL — driver default
+await cache.set("k", v, 3600);     // seconds
+await cache.set("k", v, undefined); // same as no TTL
+```
+
+
+## handle-cache-errors  `@warlock.js/cache/handle-cache-errors/SKILL.md`
+
+---
+name: handle-cache-errors
+description: 'Cache error classes — CacheError base, CacheConfigurationError, CacheConnectionError, CacheDriverNotInitializedError, CacheUnsupportedError, CacheConcurrencyError. Triggers: `CacheError`, `CacheConfigurationError`, `CacheConnectionError`, `CacheDriverNotInitializedError`, `CacheUnsupportedError`, `CacheConcurrencyError`; "catch cache errors at the boundary", "degrade when update or merge throws", "what does CacheUnsupportedError mean", "fall back when redis is down"; typical import `import { CacheError, CacheConfigurationError, CacheUnsupportedError } from "@warlock.js/cache"`. Skip: choosing a supported driver — `@warlock.js/cache/pick-cache-driver/SKILL.md`; observing errors via events — `@warlock.js/cache/observe-cache/SKILL.md`; competing libs ignore — generic `Error` patterns.'
+---
+
+# Error classes
+
+All cache errors extend `CacheError` which extends `Error`. Use `instanceof` to react selectively.
+
+```ts
+import {
+  CacheError,
+  CacheConfigurationError,
+  CacheConnectionError,
+  CacheDriverNotInitializedError,
+  CacheUnsupportedError,
+  CacheConcurrencyError,
+} from "@warlock.js/cache";
+```
+
+| Class | When it's thrown | How to react |
+| --- | --- | --- |
+| `CacheError` | Abstract base — don't throw directly, match against it to catch any cache error | `catch (e) { if (e instanceof CacheError) … }` |
+| `CacheConfigurationError` | Bad TTL string, `ttl` + `expiresAt` together, `expiresAt` in the past, missing required driver option (e.g. redis without url/host, file without directory), attempting to use an unregistered driver name | Fix the config / call site. Never catch at runtime — this is a programmer error, not a user-facing one. |
+| `CacheConnectionError` | Declared for driver connection failures. Not thrown by any built-in driver today (Redis currently logs the error and emits an `"error"` event instead of throwing on failed connect). | Reserved for future use. |
+| `CacheDriverNotInitializedError` | Any data op called before `cache.init()` / `cache.use()` | Call `cache.init()` at app startup. Tests often forget this — add a `beforeEach`. |
+| `CacheUnsupportedError` | Driver doesn't implement the requested op. Today: `update` / `merge` on the file driver; `set({ vector })` and `similar()` on file / redis / pg-without-`vector`-config. | Switch driver (memory family for dev similarity, `pg` with `vector` config for production), or queue the op. |
+| `CacheConcurrencyError` | Declared for future optimistic-concurrency exhaustion on Redis `update()` | Not thrown today. Reserved for the v2.1 `WATCH`/`MULTI` implementation. |
+
+## Special case — `setNX` unsupported
+
+Calling `cache.setNX(...)` on a driver that doesn't implement it throws a plain `Error`, not a `CacheUnsupportedError`:
+
+```ts
+// Error: "setNX is not supported by the current cache driver: memory"
+```
+
+This is legacy. The v2-preferred way is `cache.set(k, v, { onConflict: "create" })` which works on every driver (Redis native, others emulated). See [`@warlock.js/cache/configure-set-options/SKILL.md`](@warlock.js/cache/configure-set-options/SKILL.md).
+
+## Patterns
+
+### Catch-all at the boundary
+
+```ts
+try {
+  await doCachedWork();
+} catch (error) {
+  if (error instanceof CacheError) {
+    logger.warn("cache unavailable, degrading", error);
+    await doWorkWithoutCache();
+    return;
+  }
+  throw error;
+}
+```
+
+### Selective — configuration vs runtime
+
+```ts
+try {
+  await cache.set("k", v, userSuppliedOptions);
+} catch (error) {
+  if (error instanceof CacheConfigurationError) {
+    return res.status(400).json({ error: "invalid TTL options" });
+  }
+  throw error;
+}
+```
+
+### Driver-missing fallback
+
+```ts
+try {
+  await cache.merge("user:1", { lastSeen: Date.now() });
+} catch (error) {
+  if (error instanceof CacheUnsupportedError) {
+    // File driver in dev — degrade gracefully
+    const current = await cache.get("user:1");
+    await cache.set("user:1", { ...current, lastSeen: Date.now() });
+    return;
+  }
+  throw error;
+}
+```
+
+## Things the driver does NOT throw
+
+- **Missing keys** — `get()` returns `null`, never throws. Tests checking "key not in cache" should assert `resolves.toBeNull()`, not `rejects.toThrow`.
+- **Expired entries** — `get()` returns `null` and emits `"miss"` + `"expired"` events. No throw.
+- **Flush on empty** — `flush()` succeeds silently when there's nothing to flush.
+- **Concurrent writes clobbering each other** — last-write-wins by default. Use `update()` or `onConflict: "create"` if you need protection.
+
+
+## observe-cache  `@warlock.js/cache/observe-cache/SKILL.md`
+
+---
+name: observe-cache
+description: 'Cache observability — cache.metrics() for aggregate hit rate / latency p50/p95/p99 + event bus (cache.on(''hit'' / ''miss'' / ''set'' / ''removed'' / ''flushed'' / ''expired'' / ''error'', ...)). Triggers: `cache.metrics`, `cache.resetMetrics`, `cache.on`, `hit`, `miss`, `removed`, `flushed`, `error`, `hitRate`, `latencyMs`; "show cache hit rate", "page on cache errors", "is my cache being hit", "export metrics to prometheus"; typical import `import { cache } from "@warlock.js/cache"`. Skip: error classes — `@warlock.js/cache/handle-cache-errors/SKILL.md`; competing libs `prom-client`, `statsd-client`.'
+---
+
+# Cache observability — `cache.metrics()` and the event bus
+
+Two layers, different jobs.
+
+## Layer 1 — `cache.metrics()` for aggregate health
+
+Built-in collector subscribed to the manager's event bus. Returns a snapshot whenever you ask:
+
+```ts
+const m = cache.metrics();
+// {
+//   hits, misses, sets, removed, errors,
+//   hitRate,
+//   latencyMs: { p50, p95, p99, samples },
+//   byDriver: { memory: {...}, redis: {...} },
+//   startedAt,
+// }
+```
+
+**Lazy** — the collector attaches on the first `cache.metrics()` / `cache.resetMetrics()` call. Apps that never read metrics pay zero cost. Earlier events are not retroactively counted, so if you want metrics on every op including the first, call `cache.metrics()` once during startup right after `cache.init()`.
+
+**Survives `cache.use()` switches** — listens at the manager level, re-attaches to every loaded driver.
+
+**Latency** is sampled by the manager around `get` / `set` / `remove` into a circular buffer (default 1000 samples per driver). Percentiles are computed at snapshot time. Older samples age out, so percentiles reflect the recent ~1000 ops.
+
+`cache.resetMetrics()` zeroes counters + drops the buffer + bumps `startedAt`.
+
+## Layer 2 — Raw events for per-event reactions
+
+When you need to react to specific events (alerting, audit logs, debugging), subscribe to the event bus:
+
+```ts
+cache.on("error", ({ key, error }) => {
+  pagerDuty.trigger(`Cache error on ${key}`, error);
+});
+
+cache.on("miss", ({ key, driver }) => {
+  if (key.startsWith("hot.")) auditLog.miss(key, driver);
+});
+```
+
+Available events: `hit`, `miss`, `set`, `removed`, `flushed`, `expired`, `connected`, `disconnected`, `error`.
+
+Listeners attached via `cache.on(...)` survive driver switches the same way the metrics collector does.
+
+## Which one to reach for
+
+| Goal | Use |
+|---|---|
+| Show hit rate / latency in a dashboard | `cache.metrics()` |
+| Page on cache errors | `cache.on("error", ...)` |
+| Periodic export to Prometheus / StatsD | `cache.metrics()` + `setInterval` + `resetMetrics()` |
+| Audit log of every removal | `cache.on("removed", ...)` |
+| Detect a specific anti-pattern (e.g. always-miss key) | `cache.on("miss", ...)` |
+| Debug "is the cache being hit at all?" in dev | `cache.metrics()` once at the end of a flow |
+
+Both layers can coexist — events fire whether the metrics collector is attached or not.
+
+## Common shapes
+
+### Periodic export, then reset
+
+```ts
+setInterval(() => {
+  const snapshot = cache.metrics();
+  exporter.send(snapshot);
+  cache.resetMetrics();
+}, 60_000);
+```
+
+The snapshot now reflects the last minute of traffic, not the lifetime.
+
+### Boundary measurement
+
+```ts
+cache.resetMetrics();
+await runTrafficBurst();
+console.log(cache.metrics());
+```
+
+Useful for benchmarks, soak tests, "did the cache help?" before/after comparisons.
+
+### Per-driver isolation
+
+```ts
+const m = cache.metrics();
+console.log(`memory hit rate: ${m.byDriver.memory?.hitRate ?? 0}`);
+console.log(`redis p95: ${m.byDriver.redis?.latencyMs.p95 ?? 0}ms`);
+```
+
+Drivers that never fire events stay absent from `byDriver` — guard with `?.` and `?? 0`.
+
+## Things NOT to do
+
+- Don't subscribe to events to count things and ignore the built-in collector — that's exactly what it's built to do.
+- Don't call `cache.metrics()` on every request expecting per-request data — it returns a running aggregate. Use the event bus for per-call observability.
+- Don't expect lifetime percentiles. The buffer is bounded — for a 24h p95, sample-and-aggregate at your exporter, don't ask cache to remember every op forever.
+- Don't forget to attach early. If startup metrics matter, call `cache.metrics()` right after `cache.init()`.
+
+
+## overview  `@warlock.js/cache/overview/SKILL.md`
+
+---
+name: overview
+description: 'Front-door orientation for `@warlock.js/cache` — multi-driver caching (memory / memoryExtended / lru / file / redis / pg / null / mock) with a single `cache` API: get/set/has/pull/remember, TTL shapes, tag-based invalidation, key namespaces, distributed locks, stale-while-revalidate, atomic update/merge, cache lists, vector similarity, metrics + events, and the `cached()` HOF. TRIGGER when: code imports from `@warlock.js/cache` (`cache`, `cached`, `setCacheConfigurations`, a `*CacheDriver`); user asks "what does @warlock.js/cache do", "which cache driver", "cache TTL / tags / invalidation", "distributed lock", "stale-while-revalidate", "semantic / vector cache", "compare with node-cache / keyv / cache-manager"; package.json adds `@warlock.js/cache`. Skip: specific task already known — load the matching task skill directly (`cache-basics`, `pick-cache-driver`, `configure-set-options`, `use-cache-tags`, `use-cache-namespace`, `use-cache-list`, `use-cache-lock`, `use-swr`, `use-cached-hof`, `use-cache-similarity`, `use-cache-update-merge`, `use-cache-atomic`, `use-cache-bulk`, `use-cache-utils`, `apply-cache-patterns`, `observe-cache`, `handle-cache-errors`, `configure-pg-cache`, `test-cache-code`).'
+---
+
+# `@warlock.js/cache` — overview
+
+One cache API over many drivers. Pick a driver (memory, memoryExtended, LRU, file, Redis, Postgres, null, mock), wire it once, and call `cache.get` / `cache.set` / `cache.remember` everywhere. On top of the key-value basics it adds tag invalidation, key namespaces, distributed locks, stale-while-revalidate, atomic update/merge, ordered lists, vector similarity, and built-in metrics + events.
+
+## When to reach for it
+
+- You need a cache abstraction that swaps drivers per environment (memory in dev, Redis in prod) without changing call sites.
+- You want more than get/set — tag-based bulk invalidation, locks for stampede safety, SWR for slow upstreams, or a semantic cache over vectors.
+- You're inside a Warlock app (the framework wires the driver from config) — or standalone, calling `setCacheConfigurations` + `cache.init` yourself.
+
+Skip if a plain `Map` covers your needs and you'll never need a second driver, TTLs, or invalidation.
+
+## The mental model in one paragraph
+
+A single `cache` singleton fronts a configured driver. `cache.set(key, value, options?)` writes (TTL via `ttl`/`expiresAt`, inline `tags`, `onConflict`, a per-call `driver` override, or a `vector` for similarity); `cache.get` / `has` / `pull` / `remove` / `many` / `remember` read. Tags let you invalidate sets of keys you can't enumerate ahead of time; namespaces auto-prefix keys with shared TTL/tag defaults; locks serialize work across processes; SWR serves stale-but-instant while refreshing in the background; `update`/`merge` do atomic read-modify-write; `list<T>(key)` gives ordered collections; `similar(vector, …)` does nearest-neighbor retrieval. `cache.metrics()` and `cache.on(event, …)` make it observable.
+
+## Skills index
+
+Nineteen task skills. Most apps start with `cache-basics` + `pick-cache-driver` + `configure-set-options`.
+
+### Foundations
+
+- [`cache-basics`](@warlock.js/cache/cache-basics/SKILL.md) — the `cache` singleton, primary ops (`set`/`get`/`has`/`pull`/`remove`/`many`/`forever`/`increment`/`decrement`/`remember`), TTL shapes, init flow. **Start here.**
+- [`pick-cache-driver`](@warlock.js/cache/pick-cache-driver/SKILL.md) — choose + configure a driver: `null` / `memory` / `memoryExtended` / `lru` / `file` / `redis` / `pg` / `mock`; `globalPrefix` for multi-tenant scoping.
+- [`configure-set-options`](@warlock.js/cache/configure-set-options/SKILL.md) — `cache.set`'s third argument: `ttl`, `expiresAt`, `tags`, `onConflict` (create/update/upsert), `driver`, `vector`.
+- [`configure-pg-cache`](@warlock.js/cache/configure-pg-cache/SKILL.md) — Postgres driver: KV-only (default) or pgvector mode; caller owns the `pg.Pool`, `driver.schema()` emits the DDL.
+
+### Invalidation + scoping
+
+- [`use-cache-tags`](@warlock.js/cache/use-cache-tags/SKILL.md) — tag on write, `cache.tags([...]).invalidate()` drops every bound key.
+- [`use-cache-namespace`](@warlock.js/cache/use-cache-namespace/SKILL.md) — `cache.namespace(prefix, options?)` auto-prefixes keys with scope-level TTL/tag defaults and nested scopes.
+
+### Patterns
+
+- [`use-cached-hof`](@warlock.js/cache/use-cached-hof/SKILL.md) — `cached(fn, options)` wraps an async function; one declaration, many call sites, a bound `.invalidate(...args)`.
+- [`apply-cache-patterns`](@warlock.js/cache/apply-cache-patterns/SKILL.md) — `remember()` memoization, distributed locks via `onConflict: "create"`, negative caching, counters, per-tenant prefix, `CACHE_FOR.*` TTL constants.
+- [`use-cache-lock`](@warlock.js/cache/use-cache-lock/SKILL.md) — `cache.lock(key, ttl, fn)`: acquire → run → auto-release. For cron/imports/migrations and idempotent webhook/payment processing.
+- [`use-swr`](@warlock.js/cache/use-swr/SKILL.md) — `cache.swr(key, { freshTtl, staleTtl }, fn)`: instant when fresh, instant + background refresh when stale, blocks only when fully expired.
+- [`use-cache-update-merge`](@warlock.js/cache/use-cache-update-merge/SKILL.md) — atomic read-modify-write via `cache.update(key, fn)` / `cache.merge(key, partial)`, serialized per key, TTL-preserving.
+- [`use-cache-atomic`](@warlock.js/cache/use-cache-atomic/SKILL.md) — `cache.increment` / `cache.decrement` counters; per-driver atomicity + TTL behavior.
+- [`use-cache-bulk`](@warlock.js/cache/use-cache-bulk/SKILL.md) — `cache.many(keys)` / `cache.setMany(record, ttl?)` for batch reads/writes.
+- [`use-cache-list`](@warlock.js/cache/use-cache-list/SKILL.md) — `cache.list<T>(key)`: `push`/`unshift`/`pop`/`shift`/`slice`/`trim`/`clear` for queues, recent-N buffers, sliding windows.
+- [`use-cache-similarity`](@warlock.js/cache/use-cache-similarity/SKILL.md) — `cache.similar(vector, { topK, threshold?, tags? })` for semantic caches, RAG retrieval, nearest-neighbor lookup.
+
+### Operations
+
+- [`observe-cache`](@warlock.js/cache/observe-cache/SKILL.md) — `cache.metrics()` (hit rate, latency p50/p95/p99) + the event bus (`cache.on("hit" | "miss" | "set" | "removed" | "flushed" | "expired" | "connected" | "disconnected" | "error", …)`).
+- [`handle-cache-errors`](@warlock.js/cache/handle-cache-errors/SKILL.md) — the error classes: `CacheError`, `CacheConfigurationError`, `CacheConnectionError`, `CacheDriverNotInitializedError`, `CacheUnsupportedError`, `CacheConcurrencyError`.
+- [`test-cache-code`](@warlock.js/cache/test-cache-code/SKILL.md) — `MockCacheDriver` (behavioral assertions), `MemoryCacheDriver` (full-stack), `NullCacheDriver` (graceful degradation).
+
+### Utilities
+
+- [`use-cache-utils`](@warlock.js/cache/use-cache-utils/SKILL.md) — low-level re-exports: `parseTtl`, `parseCacheKey`, `resolveTtl`, `expiresAtToTtl`, `mergeTagSets`, `injectTags`, `cosineSimilarity`, and the `CACHE_FOR` TTL enum.
+
+## What this package deliberately doesn't do
+
+- **Be a database.** It's a cache — entries expire, drivers may evict. Don't store anything you can't recompute.
+- **Guarantee cross-driver feature parity.** Vector similarity needs a memory-family driver (`memory` / `memoryExtended` / `lru`, brute force) or `pg` with pgvector; `redis` and `file` raise `CacheUnsupportedError`. Locks/tags behave per driver. Unsupported ops raise `CacheUnsupportedError` rather than silently degrading.
+- **Own your Postgres pool.** The `pg` driver takes the `pg.Pool`/`Client` you already built and never closes it — connection lifecycle stays yours. (Redis is the opposite: you pass `url`/`host` options and the driver builds and owns the client, calling `quit()` on `disconnect()`.)
+
+## See also
+
+- [`@warlock.js/core/overview/SKILL.md`](@warlock.js/core/overview/SKILL.md) — wires the cache driver from app config and exposes the singleton.
+- `mongez-agent-kit-authoring-skills` (load via agent-kit sync) — how this becomes `.claude/skills/warlock-js-cache-overview/`.
+
+
+## pick-cache-driver  `@warlock.js/cache/pick-cache-driver/SKILL.md`
+
+---
+name: pick-cache-driver
+description: 'Pick a cache driver — null / memory / memoryExtended / lru / file / redis / pg / mock — and configure it. Triggers: `cache.setCacheConfigurations`, `BaseCacheDriver`, `cache.use`, `cache.load`, `cache.driver`, `globalPrefix`; "which cache driver should I use", "configure redis driver", "register custom cache driver", "multi-tenant scoping"; typical import `import { cache, BaseCacheDriver } from "@warlock.js/cache"`. Skip: cache CRUD — `@warlock.js/cache/cache-basics/SKILL.md`; pg setup — `@warlock.js/cache/configure-pg-cache/SKILL.md`; competing libs `lru-cache`, `node-cache`, `keyv`, `ioredis`; native `Map`.'
+---
+
+# Cache drivers — pick the right one
+
+Seven production drivers + a mock driver ship in-box. Pick by durability, scope, and workload.
+
+| Driver | Process scope | Persists on restart | Good for | Avoid when |
+| --- | --- | --- | --- | --- |
+| `null` | — | — | Disabling cache in tests; feature-flagging off | You actually want caching |
+| `memory` | Single process | No | Hot in-process data with default TTL; smallest latency | Multi-process / multi-node |
+| `memoryExtended` | Single process | No | Sliding-window TTL (TTL resets on every read) | Any multi-process deploy |
+| `lru` | Single process | No | Bounded in-memory caches (capacity-based eviction) | Need cross-process sharing |
+| `file` | Single host | Yes | Build artefacts, local dev persistence across restarts | Concurrency (no locks); multi-host |
+| `redis` | Shared | Yes (Redis-managed) | Anything shared across processes / nodes | Single-process-only workload — overkill |
+| `pg` | Shared | Yes (Postgres-managed) | You already run Postgres; semantic caching / RAG via pgvector | High-throughput hot reads (Redis is faster) |
+
+## Capability matrix
+
+| Capability | null | memory | memoryExt | lru | file | redis | pg |
+| --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
+| `set` / `get` / `remove` / `flush` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| TTL (number or string) | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Sliding TTL on read | — | — | ✓ | — | — | — | — |
+| `removeNamespace` | noop | ✓ | ✓ | ✓ (prefix-scan) | ✓ | ✓ | ✓ (LIKE prefix) |
+| `onConflict: "create"` / `"update"` | noop | emulated | emulated | emulated | emulated | native `NX`/`XX` | native (INSERT ON CONFLICT) |
+| Native increment / decrement | — | ✓ | ✓ | ✓ | ✓ | atomic `INCRBY`/`DECRBY` | ✓ |
+| `update()` / `merge()` | ✓ | ✓ | ✓ | ✓ | ✗ throws | ✓ (single-process safety only today) | ✓ |
+| List sub-API | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (O(n) JSON blob today; native LPUSH/LRANGE in v2.1) | ✓ |
+| Tagged invalidation | noop | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (native GIN(tags)) |
+| `similar()` / `set({ vector })` | returns `[]` / noop | ✓ brute force | ✓ brute force | ✓ brute force | ✗ throws | ✗ throws (Phase 2 backlog) | ✓ (with `vector` config — pgvector) |
+
+## Global config TTL — accepts number or string
+
+```ts
+options: {
+  redis:  { url: "...", ttl: "7d" },   // string OK
+  memory: { ttl: 3600 },                // number OK
+  lru:    { capacity: 10_000 },         // LRU has no TTL option today
+  file:   { directory: () => "/var/cache/myapp", ttl: "1h" },
+  pg:     { client: pool, ttl: "1h" },                           // KV-only
+  // pg with pgvector:
+  // pg:  { client: pool, vector: { dimensions: 1536, index: "hnsw" } },
+}
+```
+
+## Global prefix (multi-tenant scoping)
+
+Every driver accepts `globalPrefix: string | (() => string)`. The function form runs per call — pair it with request-local async context to scope every cached key to the current tenant / user / client automatically:
+
+```ts
+options: {
+  redis: {
+    url: "...",
+    globalPrefix: () => `tenant-${currentContext.tenantId}`,
+  },
+}
+```
+
+## Registering a custom driver
+
+```ts
+import { BaseCacheDriver, cache } from "@warlock.js/cache";
+
+class MemcachedCacheDriver extends BaseCacheDriver<MyClient, MyOptions> {
+  public name = "memcached";
+  // … implement set / get / remove / flush / removeNamespace / connect
+}
+
+cache.setCacheConfigurations({
+  default: "memcached",
+  drivers: { memcached: MemcachedCacheDriver },
+  options: { memcached: { host: "localhost" } },
+});
+```
+
+Extending `BaseCacheDriver` gives you free: TTL parsing, key parsing, event emission, stampede-safe `remember`, deep-clone-on-read, default `update` / `merge` / `list` implementations.
+
+## Runtime driver options — `cache.use(name, options)`
+
+Some driver options can only be built at runtime (`pg`'s `client: pg.Pool`, pre-wired clients). Pass them as the second arg to `cache.use` / `cache.load` / `cache.driver` — they merge over `setCacheConfigurations({ options })` per-key, runtime wins.
+
+```ts
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+cache.setCacheConfigurations({
+  default: "pg",
+  drivers: { pg: PgCacheDriver },
+  options: { pg: { table: "cache" } },        // static
+});
+
+await cache.use("pg", { client: pool });       // runtime — skip init() in this case
+```
+
+Constraints:
+- The driver name must be registered in `setCacheConfigurations({ drivers })` — runtime options don't bypass registration.
+- Once a driver is loaded, calling `use`/`load`/`driver` again with **non-empty** new options throws `CacheConfigurationError`. Register a second driver name if you need a different config.
+- Calling without options (or with `{}`) on an already-loaded driver returns the cached instance silently.
+
+## Per-call driver override
+
+When most writes go to the default driver but one call needs a different one:
+
+```ts
+await cache.set("audit:event", event, { driver: "redis" });
+```
+
+The manager loads (and connects) the override driver lazily on first use, then routes that single operation through it without mutating `currentDriver`.
+
+## See also
+
+- [`@warlock.js/cache/configure-pg-cache/SKILL.md`](@warlock.js/cache/configure-pg-cache/SKILL.md) — full pg setup (KV-only and pgvector mode)
+- [`@warlock.js/cache/test-cache-code/SKILL.md`](@warlock.js/cache/test-cache-code/SKILL.md) — `MockCacheDriver` and `NullCacheDriver` for tests
+
+
+## test-cache-code  `@warlock.js/cache/test-cache-code/SKILL.md`
+
+---
+name: test-cache-code
+description: 'Test code that touches cache — MockCacheDriver (behavioral assertions with wasCalled / callLog), MemoryCacheDriver (full-stack), NullCacheDriver (graceful-degradation). Triggers: `MockCacheDriver`, `MemoryCacheDriver`, `NullCacheDriver`, `wasCalled`, `callLog`, `getStored`, `reset`, `cache.on`; "assert cache was invalidated", "test code that uses cache.set", "mock cache in vitest", "test similarity without a real embedder", "stub the pg cache driver"; typical import `import { cache, MockCacheDriver, MemoryCacheDriver } from "@warlock.js/cache"`. Skip: real driver picks — `@warlock.js/cache/pick-cache-driver/SKILL.md`; competing libs `jest-mock`, `sinon`, `redis-mock`; native `vi.fn`.'
+---
+
+# Testing code that touches cache
+
+Three good strategies — pick based on what you're testing.
+
+## Strategy 1 — `MockCacheDriver` for behavioral assertions (preferred)
+
+When you want to assert "did my service actually invalidate the cache after the update?" or "was `set` called with the right TTL?", reach for `MockCacheDriver`. It implements the full driver contract on a `Map` and adds three introspection helpers:
+
+- `wasCalled(operation, key?)` — was a given op invoked? Optional key matched post-`parseKey`.
+- `getStored(key)` — raw stored value, bypassing TTL handling and clone protection.
+- `reset()` — wipe storage, tag index, and call log in one call.
+- `callLog: CacheCall[]` — ordered record of every op (operation, parsed key, raw args, timestamp).
+
+```ts
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { cache, MockCacheDriver } from "@warlock.js/cache";
+
+describe("UserService.update", () => {
+  let driver: MockCacheDriver;
+
+  beforeEach(async () => {
+    cache.setCacheConfigurations({
+      default: "mock",
+      logging: false,
+      drivers: { mock: MockCacheDriver },
+      options: { mock: {} },
+    });
+    await cache.init();
+
+    driver = cache.currentDriver as MockCacheDriver;
+  });
+
+  afterEach(async () => {
+    driver.reset();
+    await cache.disconnect();
+  });
+
+  it("invalidates the user cache after update", async () => {
+    await new UserService().update(42, { name: "Jane" });
+
+    expect(driver.wasCalled("remove", "users.42")).toBe(true);
+  });
+
+  it("caches with the right TTL on read-through", async () => {
+    await new UserService().getProfile(1);
+
+    const setCall = driver.callLog.find((call) => call.operation === "set");
+    expect(setCall?.args[1]).toBe("1h");
+  });
+});
+```
+
+`wasCalled` normalizes object keys, so `wasCalled("set", { id: 1 })` and `wasCalled("set", "id.1")` match the same call.
+
+## Strategy 2 — `MemoryCacheDriver` for full-stack integration tests
+
+When you want the real read/write semantics (eviction, TTL expiry, similarity scoring) without the introspection ceremony, `MemoryCacheDriver` is the right pick. Same setup pattern as the mock — swap `MockCacheDriver` for `MemoryCacheDriver`.
+
+`MockCacheDriver` does NOT implement `similar()` — vector writes are recorded into the call log but nearest-neighbor scoring is not available. Tests that call `cache.similar(...)` should use the memory driver.
+
+## Strategy 3 — `NullCacheDriver` when you need cache *off*
+
+Use `NullCacheDriver` to disable caching entirely for code paths that should still work without a cache (graceful-degradation tests):
+
+```ts
+cache.setCacheConfigurations({
+  default: "null",
+  drivers: { null: NullCacheDriver },
+  options: { null: {} },
+});
+await cache.init();
+
+// All cache ops no-op; get() always returns null; set() silently discards.
+```
+
+## Mocking Redis (for driver-level tests, not app code)
+
+For tests that specifically exercise `RedisCacheDriver`, use `vi.mock("redis")` with an in-memory fake. Example (condensed from `redis-cache-driver.spec.ts`):
+
+```ts
+import { vi } from "vitest";
+
+class FakeRedisClient {
+  public store = new Map<string, string>();
+  private expires = new Map<string, number>();
+  public on() { return this; }
+  public async connect() {}
+  public async quit() {}
+  public async set(key: string, value: string, opts?: { EX?: number; NX?: boolean; XX?: boolean }) {
+    if (opts?.NX && this.store.has(key)) return null;
+    if (opts?.XX && !this.store.has(key)) return null;
+    this.store.set(key, value);
+    if (opts?.EX) this.expires.set(key, Date.now() + opts.EX * 1000);
+    return "OK";
+  }
+  public async get(key: string) {
+    const ttl = this.expires.get(key);
+    if (ttl && ttl < Date.now()) {
+      this.store.delete(key);
+      return null;
+    }
+    return this.store.get(key) ?? null;
+  }
+  public async del(keys: string | string[]) {
+    const arr = Array.isArray(keys) ? keys : [keys];
+    let count = 0;
+    for (const k of arr) if (this.store.delete(k)) count++;
+    return count;
+  }
+  public async keys(pattern: string) {
+    const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$");
+    return [...this.store.keys()].filter((k) => regex.test(k));
+  }
+  public async flushAll() { this.store.clear(); this.expires.clear(); }
+  public async incrBy(key: string, n: number) {
+    const next = Number(this.store.get(key) ?? 0) + n;
+    this.store.set(key, String(next));
+    return next;
+  }
+  public async decrBy(key: string, n: number) { return this.incrBy(key, -n); }
+}
+
+const fakeClient = new FakeRedisClient();
+vi.mock("redis", () => ({ createClient: vi.fn(() => fakeClient) }));
+```
+
+**One-time gotcha:** `RedisCacheDriver` kicks off an async `loadRedis()` at module import that resolves its internal "redis is available" flag. Before running any test that calls `connect()`, wait a short tick after the first dynamic import so the flag flips. The in-tree spec uses:
+
+```ts
+async function importDriver() {
+  const mod = await import("./redis-cache-driver");
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  return mod.RedisCacheDriver;
+}
+```
+
+## Silencing cache logs in tests
+
+The in-package vitest config runs `silent: true`, but if you're outside the package, explicitly disable logging:
+
+```ts
+cache.setCacheConfigurations({
+  default: "memory",
+  logging: false,             // <-- here
+  drivers: { memory: MemoryCacheDriver },
+  options: { memory: {} },
+});
+```
+
+Or per-driver: `driver.setLoggingState(false)`.
+
+## Spying on events
+
+Every driver emits `hit`, `miss`, `set`, `removed`, `flushed`, `expired`. Attach listeners to assert cache behavior without inspecting internal state:
+
+```ts
+const hits = vi.fn();
+cache.on("hit", hits);
+
+await service.getProfile("1");
+await service.getProfile("1");
+
+expect(hits).toHaveBeenCalledTimes(1);   // second call was a hit
+```
+
+Listeners registered via `cache.on(...)` automatically attach to any driver loaded later, so order of `on()` vs `init()` doesn't matter.
+
+## Tests for `update` / `merge` concurrency
+
+The chain-serialization guarantee is worth testing when your code fans out concurrent updates:
+
+```ts
+await cache.set("counter", 0);
+
+await Promise.all(
+  Array.from({ length: 10 }, () =>
+    cache.update<number>("counter", (c) => (c ?? 0) + 1),
+  ),
+);
+
+await expect(cache.get("counter")).resolves.toBe(10);
+```
+
+Runs in-process only — for cross-process safety see [`@warlock.js/cache/use-cache-lock/SKILL.md`](@warlock.js/cache/use-cache-lock/SKILL.md).
+
+## Testing similarity code paths
+
+`MemoryCacheDriver` runs `similar()` brute-force in-process — perfect for tests of code that calls `cache.similar(...)`. Use stable, hand-written vectors (don't call a real embedder in tests):
+
+```ts
+beforeEach(async () => {
+  cache.setCacheConfigurations({
+    default: "memory",
+    logging: false,
+    drivers: { memory: MemoryCacheDriver },
+    options: { memory: {} },
+  });
+  await cache.init();
+});
+
+it("returns the most similar doc above threshold", async () => {
+  await cache.set("a", { text: "alpha" }, { vector: [1, 0, 0] });
+  await cache.set("b", { text: "beta" },  { vector: [0, 1, 0] });
+
+  const hits = await cache.similar([1, 0, 0], { topK: 1, threshold: 0.5 });
+
+  expect(hits).toHaveLength(1);
+  expect(hits[0].key).toBe("a");
+});
+```
+
+## Testing the `pg` driver without a real Postgres
+
+The `pg` driver accepts any object satisfying `PgClientLike` (`{ query(text, values) }`). For unit tests, hand-roll a minimal Map-backed fake — see `src/drivers/pg-cache-driver.spec.ts` for a 60-line `FakePool` that recognizes the exact SQL shapes the driver issues. For integration coverage, gate a real-PG suite on a `POSTGRES_URL` env var and skip cleanly when unset.
+
+
+## use-cache-atomic  `@warlock.js/cache/use-cache-atomic/SKILL.md`
+
+---
+name: use-cache-atomic
+description: 'Atomic counters via cache.increment(key, by=1) / cache.decrement(key, by=1) — returns the new number, throws on non-numeric values. Triggers: `cache.increment`, `cache.decrement`, "view counter", "page views", "atomic counter", "decrement stock", "rate-limit counter", "INCRBY"; typical import `import { cache } from "@warlock.js/cache"`. Skip: read-modify-write of objects — `@warlock.js/cache/use-cache-update-merge/SKILL.md`; named-lock coordination — `@warlock.js/cache/use-cache-lock/SKILL.md`; competing libs `ioredis` `INCR`, native counters in a `Map`.'
+---
+
+# Atomic counters — `cache.increment` / `cache.decrement`
+
+Numeric counters that go up and down without a read-then-write race in your own
+code. Both return the **new** value after the operation.
+
+```ts
+import { cache } from "@warlock.js/cache";
+
+const views = await cache.increment(`post.${id}.views`);     // +1 → 1, 2, 3…
+const bulk = await cache.increment(`post.${id}.views`, 10);  // +10
+const left = await cache.decrement(`stock.${sku}`, 3);       // -3
+```
+
+- A missing key is treated as `0`, so the first `increment` returns `by` (default `1`).
+- `decrement(key, n)` is exactly `increment(key, -n)`.
+- The stored value must be numeric — incrementing a string/object throws:
+  `Error: Cannot increment non-numeric value for key: <key>`.
+
+## Atomicity is per-driver
+
+| Driver | Guarantee |
+|---|---|
+| `redis` | Native `INCRBY` / `DECRBY` — atomic **across processes/nodes** |
+| memory family / `file` / `pg` | Read-modify-write — atomic **within one process** only |
+
+For a counter that multiple instances bump concurrently (a global rate limit, a
+shared tally), use the [`redis`](@warlock.js/cache/pick-cache-driver/SKILL.md)
+driver. In-memory counters are fine for single-node work.
+
+## TTL behavior differs too
+
+This is the gotcha to remember:
+
+- **Redis** `INCRBY` **preserves** the key's existing TTL.
+- **Memory-family / pg** write the new value through `set()` with the driver's
+  **default** TTL — they do **not** carry over the previous entry's remaining TTL.
+
+So if you need a counter that expires (a fixed window), set the TTL explicitly
+when you create it and don't rely on `increment` to keep a window alive on the
+in-memory drivers. For a value that should keep its TTL across edits, reach for
+[`cache.update`](@warlock.js/cache/use-cache-update-merge/SKILL.md), which
+preserves the remaining TTL.
+
+## Common shapes
+
+```ts
+// View counter
+await cache.increment(`post.${id}.views`);
+
+// Decrement stock, guard against oversell
+const remaining = await cache.decrement(`stock.${sku}`, qty);
+if (remaining < 0) {
+  await cache.increment(`stock.${sku}`, qty); // roll back
+  throw new Error("Out of stock");
+}
+```
+
+## See also
+
+- [`@warlock.js/cache/use-cache-update-merge/SKILL.md`](@warlock.js/cache/use-cache-update-merge/SKILL.md) — atomic read-modify-write for objects, TTL-preserving
+- [`@warlock.js/cache/use-cache-lock/SKILL.md`](@warlock.js/cache/use-cache-lock/SKILL.md) — coordinate multi-step critical sections
+- [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md) — when you need cross-node atomicity
+
+
+## use-cache-bulk  `@warlock.js/cache/use-cache-bulk/SKILL.md`
+
+---
+name: use-cache-bulk
+description: 'Bulk reads/writes via cache.many(keys[]) → values[] (nulls for misses, order preserved) and cache.setMany(record, ttl?) → void. Triggers: `cache.many`, `cache.setMany`, "get multiple keys at once", "batch read cache", "warm the cache", "preload many keys", "mget", "mset"; typical import `import { cache } from "@warlock.js/cache"`. Skip: tag-based bulk invalidation — `@warlock.js/cache/use-cache-tags/SKILL.md`; single-key ops — `@warlock.js/cache/cache-basics/SKILL.md`; competing libs `ioredis` `MGET`/`MSET`.'
+---
+
+# Bulk operations — `cache.many` / `cache.setMany`
+
+Read or write a batch of keys in one call instead of awaiting them one at a time.
+
+## Read many — `many(keys)`
+
+```ts
+import { cache } from "@warlock.js/cache";
+
+const [alice, bob, carol] = await cache.many(["user.1", "user.2", "user.3"]);
+```
+
+- Returns an array **positionally aligned** with `keys`.
+- Missing keys come back as `null` (same as `get`), so the result length always
+  equals the input length — zip them back together by index.
+
+```ts
+const ids = [1, 2, 3];
+const users = await cache.many(ids.map((id) => `user.${id}`));
+
+const missingIds = ids.filter((_, index) => users[index] === null);
+// fetch only the misses from the origin…
+```
+
+## Write many — `setMany(items, ttl?)`
+
+```ts
+await cache.setMany({
+  "user.1": alice,
+  "user.2": bob,
+  "user.3": carol,
+}, 3600); // optional TTL (seconds) applied to every entry
+```
+
+- Keys are the object keys; values are the object values.
+- The optional second arg is a single TTL (seconds) applied to **all** entries —
+  there's no per-entry TTL or `tags` knob here. When you need tags or mixed TTLs,
+  loop with [`cache.set`](@warlock.js/cache/configure-set-options/SKILL.md) and
+  the rich options object instead.
+
+## Performance note
+
+On every driver these run their underlying `get`/`set` calls **concurrently**
+(`Promise.all`) on the shared connection; on the memory family it's effectively
+instant. There's no partial-failure handling — if one write rejects, the
+returned promise rejects.
+
+## See also
+
+- [`@warlock.js/cache/cache-basics/SKILL.md`](@warlock.js/cache/cache-basics/SKILL.md) — single-key `get` / `set` / `remember`
+- [`@warlock.js/cache/configure-set-options/SKILL.md`](@warlock.js/cache/configure-set-options/SKILL.md) — per-entry TTL, tags, conflict policy
+- [`@warlock.js/cache/use-cache-tags/SKILL.md`](@warlock.js/cache/use-cache-tags/SKILL.md) — invalidate a batch by tag
+
+
+## use-cache-list  `@warlock.js/cache/use-cache-list/SKILL.md`
+
+---
+name: use-cache-list
+description: 'Ordered collections via cache.list<T>(key) — push / unshift / pop / shift / slice / all / length / trim / clear. Triggers: `cache.list`, `push`, `unshift`, `pop`, `shift`, `slice`, `trim`, `clear`; "job queue in cache", "keep most recent N events", "audit log buffer", "FIFO queue"; typical import `import { cache } from "@warlock.js/cache"`. Skip: locking around list writes — `@warlock.js/cache/use-cache-lock/SKILL.md`; competing libs `bullmq`, `bee-queue`, `bull`, `ioredis` `LPUSH`; native `Array.push`.'
+---
+
+# Lists — the `cache.list<T>(key)` sub-API
+
+Dedicated accessor for ordered collections — queues, recent-N buffers, sliding windows. Keeps the flat `CacheDriver` contract lean while giving list-shaped data a typed, purpose-built surface.
+
+## Shape
+
+```ts
+const recent = cache.list<Event>("recent-events");
+
+await recent.push(event);                    // append to tail — returns new length
+await recent.unshift(priorityEvent);          // prepend to head — returns new length
+const tail = await recent.pop();              // remove + return tail
+const head = await recent.shift();            // remove + return head
+const first10 = await recent.slice(0, 10);    // view — does not mutate
+const all = await recent.all();
+const count = await recent.length();
+await recent.trim(0, 99);                     // keep only indices 0..99 inclusive
+await recent.clear();
+```
+
+## Type safety
+
+The generic flows through every method. Pass the element type at the accessor call, not on each method:
+
+```ts
+type Event = { type: string; at: number };
+const queue = cache.list<Event>("jobs:queue");
+
+await queue.push({ type: "import", at: Date.now() });   // ✓
+await queue.push("not an event" as never);              // ✗ at the caller
+```
+
+## Current performance characteristics
+
+The default implementation (used by memory, memoryExtended, LRU, file, **and redis today**) stores the entire list as a single cache entry and does read-mutate-write on every op. Correct for every driver, O(n) per op.
+
+Redis-native `LPUSH` / `RPUSH` / `LRANGE` / `LTRIM` is planned for v2.1 (see `domains/cache/backlog.md`). Until then, treat Redis list ops as O(n) and avoid very large lists on Redis.
+
+## Concurrency warning
+
+List writes on memory / file / LRU drivers **race** when two callers push simultaneously — the default read-mutate-write loop has no lock. If you need safe concurrent list writes today, wrap pushes in a distributed-lock pattern (see [`@warlock.js/cache/use-cache-lock/SKILL.md`](@warlock.js/cache/use-cache-lock/SKILL.md)) or use a single writer.
+
+Single-process memory with a single writer (typical test / script usage) is fine.
+
+## Empty-list cleanup
+
+When a list becomes empty (e.g. after successive `pop()` / `shift()` / `trim(0, -1)`), the backing cache entry is **removed** — `cache.get(key)` returns `null`, not `[]`. This keeps the store from accumulating empty list entries.
+
+```ts
+await recent.push("a");
+await recent.pop();
+await cache.get("recent-events");   // null, not []
+```
+
+## Typical recipes
+
+```ts
+// Recent-N audit log
+const audit = cache.list<AuditEntry>("audit:recent");
+await audit.unshift(entry);          // newest at head
+await audit.trim(0, 999);             // keep most-recent 1000
+
+// Lightweight job queue (single-node)
+const queue = cache.list<Job>("jobs:pending");
+await queue.push(job);
+const next = await queue.shift();     // FIFO
+
+// Stack
+const stack = cache.list<Frame>("stack");
+await stack.push(frame);
+const top = await stack.pop();        // LIFO
+```
+
+## What lists are NOT for
+
+- Unordered uniqueness — no native set today; use a plain object/Map in memory, or roll your own via `cache.get/set`.
+- Hash / field maps — same; use individual keys with a shared prefix.
+- Ordered top-N with scoring — no sorted-set analog today.
+
+These are tracked as candidates for v3.
+
+
+## use-cache-lock  `@warlock.js/cache/use-cache-lock/SKILL.md`
+
+---
+name: use-cache-lock
+description: 'Distributed lock via cache.lock(key, ttl, fn) — acquire, run fn, auto-release. Returns {acquired: true, value} or {acquired: false}. Triggers: `cache.lock`, `LockOutcome`, `acquired`, `owner`; "run cron on only one server", "idempotent webhook handler", "dedup payment processing", "lock a task across nodes"; typical import `import { cache } from "@warlock.js/cache"`. Skip: raw `onConflict: "create"` recipe — `@warlock.js/cache/apply-cache-patterns/SKILL.md`; memoization — `@warlock.js/cache/use-cached-hof/SKILL.md`; competing libs `redlock`, `async-mutex`, `proper-lockfile`.'
+---
+
+# `cache.lock()` — distributed locks with auto-release
+
+`cache.lock(key, ttl, fn)` acquires a distributed lock, runs `fn`, and auto-releases (even on throw). Built on `set({ onConflict: "create" })` — Redis-native where available, emulated elsewhere.
+
+## When to use
+
+- A task should run on only **one server at a time** (cron jobs, imports, migrations).
+- Idempotent webhook or payment processing — dedup across retries.
+- Any time you'd otherwise write `try { … } finally { cache.remove(lockKey); }`.
+
+**Not for memoization** — use [`cached()`](@warlock.js/cache/use-cached-hof/SKILL.md) or `cache.remember()`.
+
+## Shape
+
+```ts
+// Primary — positional TTL
+await cache.lock(key, ttl, fn);
+
+// With options — owner for debugging, per-call driver override
+await cache.lock(key, { ttl, owner?, driver? }, fn);
+```
+
+**TTL is required.** Forgotten locks stay forever if the process crashes; the TTL is your safety net.
+
+## Return shape — discriminated union
+
+```ts
+type LockOutcome<T> =
+  | { acquired: true; value: T }
+  | { acquired: false };
+```
+
+Unambiguous even when `fn` returns `undefined`. Narrow with TS:
+
+```ts
+const outcome = await cache.lock("lock.x", "1m", async () => compute());
+
+if (outcome.acquired) {
+  console.log(outcome.value);   // typed
+} else {
+  console.log("someone else is running");
+}
+```
+
+## Recipes
+
+### Cron on only one server
+
+```ts
+cron.daily("3am", () =>
+  cache.lock("lock.cleanup", "30m", () => db.cleanup()),
+);
+```
+
+### Idempotent webhook
+
+```ts
+app.post("/webhooks/stripe", async (req, res) => {
+  const outcome = await cache.lock(
+    `webhook.stripe.${req.body.id}`,
+    "24h",
+    () => processStripeEvent(req.body),
+  );
+
+  if (!outcome.acquired) {
+    return res.status(200).json({ status: "already-processed" });
+  }
+
+  res.status(200).json({ status: "processed" });
+});
+```
+
+### Batch job with debug-friendly owner
+
+```ts
+await cache.lock(
+  `lock.report.${date}`,
+  { ttl: "1h", owner: `worker.${process.env.HOSTNAME}` },
+  () => generateReport(date),
+);
+```
+
+`await cache.get("lock.report.2026-04-24")` reveals which worker holds the lock.
+
+## Driver behavior
+
+| Driver | Cross-process safe? |
+|--------|:-:|
+| `redis` | ✅ Native `SET … NX EX` |
+| `memory` / `memoryExtended` / `lru` | ❌ In-process only |
+| `file` | ⚠️ Single-host only (races across hosts) |
+| `null` | n/a — always "acquires" |
+
+## Gotchas
+
+- **Non-re-entrant in v1.** A recursive call for the same key gets `{ acquired: false }`.
+- **Don't release inside `fn`.** `lock()` handles release in `finally`. Manual `cache.remove(lockKey)` inside `fn` would let another process jump in mid-work.
+- **TTL shorter than `fn` runtime = race.** Pick a TTL with generous margin.
+- **Cross-server requires Redis.** Memory / LRU drivers don't coordinate across processes.
+
+
+## use-cache-namespace  `@warlock.js/cache/use-cache-namespace/SKILL.md`
+
+---
+name: use-cache-namespace
+description: 'Scope cache keys via cache.namespace(prefix, options?) — every key auto-prefixed, scope-level ttl / tags defaults, nested scopes, .clear() sugar. Triggers: `cache.namespace`, `cache.removeNamespace`, `clear`, `globalPrefix`; "scope cache keys under a prefix", "share TTL across a whole prefix", "drop every key under user.1", "nested cache scopes"; typical import `import { cache } from "@warlock.js/cache"`. Skip: tag-based bulk drop — `@warlock.js/cache/use-cache-tags/SKILL.md`; multi-tenant driver-level prefix — `@warlock.js/cache/pick-cache-driver/SKILL.md`; SWR — `@warlock.js/cache/use-swr/SKILL.md`; competing libs `keyv` namespaces.'
+---
+
+# Scoped caches — `cache.namespace(prefix, options?)`
+
+When you'll touch the same prefix more than a couple of times, grab a scoped handle instead of repeating the prefix at every call site.
+
+## Shape
+
+```ts
+const chat = cache.namespace(`chats.${id}`, { ttl: "30d", tags: [`user.${userId}`] });
+
+await chat.set("messages.10", msg);          // chats.<id>.messages.10, 30d, user.<userId>
+await chat.set("draft", d, { ttl: "1h" });   // per-call ttl wins
+await chat.tags(["unread"]).set("ping", p);  // tags merge: user.<userId> + unread
+await chat.clear();                           // sugar for removeNamespace
+```
+
+Scopes are pure views — same connection, same driver, no extra state. Per-call options always win over scope defaults; tags merge additively.
+
+## Nested scopes
+
+```ts
+const chat = cache.namespace(`chats.${id}`, { ttl: "30d" });
+const typing = chat.namespace("typing", { ttl: "5s" });  // overrides parent ttl
+
+await typing.set("user.42", true);                       // chats.<id>.typing.user.42, 5s
+```
+
+Nested scopes inherit defaults and can override. Tags accumulate.
+
+## When to reach for it
+
+- The prefix repeats more than 2–3 times.
+- A whole prefix shares a TTL or tag policy.
+- You want `.clear()` to read like the intent ("clear this chat") instead of `removeNamespace(...)` boilerplate.
+
+Inline prefixes are still fine for one-off writes.
+
+## Plain `removeNamespace` when you already have the prefix
+
+When you *do* know the prefix string and don't need a scoped handle for repeated reads/writes:
+
+```ts
+await cache.set("user:1:profile", profile);
+await cache.set("user:1:prefs",   prefs);
+await cache.set("user:2:profile", otherProfile);
+
+await cache.removeNamespace("user.1");  // drops both user:1 entries, keeps user:2
+```
+
+Cheaper than tags (no reverse index to maintain). Every real driver supports it — memory family and `lru` by prefix-scan, `file` by directory, `redis`/`pg` by key/`LIKE` prefix; `null` no-ops. See [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md).
+
+## Multi-tenant scoping at the driver level
+
+Instead of every call passing a tenant prefix, attach `globalPrefix` to the driver config — see [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md). Function form runs per call.
+
+```ts
+options: {
+  redis: {
+    url: "...",
+    globalPrefix: () => `tenant-${currentContext.tenantId}`,
+  },
+}
+```
+
+## SWR + namespace
+
+```ts
+const feed = cache.namespace(`feed.${userId}`, { tags: [`user.${userId}`] });
+
+await feed.swr(
+  "home",
+  { freshTtl: "30s", staleTtl: "10m", tags: ["computed"] },
+  () => buildHomeFeed(userId),
+);
+// stored at feed.<userId>.home, tagged [user.<userId>, computed]
+```
+
+Note: scope `ttl` defaults are NOT applied to SWR — `freshTtl` / `staleTtl` always come from the call site. See [`@warlock.js/cache/use-swr/SKILL.md`](@warlock.js/cache/use-swr/SKILL.md).
+
+## Things NOT to do
+
+- Don't create a `cache.namespace(prefix)` for a single read/write — the boilerplate doesn't pay off until the prefix repeats. Inline `cache.set("prefix.foo", ...)` is fine.
+- Don't expect `cache.namespace(prefix).clear()` to do anything on the `null` driver — `removeNamespace` no-ops there (it caches nothing).
+- Don't mix prefix separators. The convention is `.` (dot) — pick one and stick with it across scopes so nested prefixes compose predictably.
+
+
+## use-cache-similarity  `@warlock.js/cache/use-cache-similarity/SKILL.md`
+
+---
+name: use-cache-similarity
+description: 'Vector retrieval via cache.similar(vector, {topK, threshold?, tags?}) — index with set(k, v, {vector}), query nearest by cosine similarity. Triggers: `cache.similar`, `cache.set` with `vector`, `topK`, `threshold`, `tags`, `cosineSimilarity`; "build a semantic cache for an LLM", "RAG retrieval from cache", "nearest-neighbor over cached entries", "skip the LLM when a similar answer exists"; typical import `import { cache } from "@warlock.js/cache"`. Skip: pgvector setup specifics — `@warlock.js/cache/configure-pg-cache/SKILL.md`; competing libs `pinecone`, `weaviate`, `chromadb`, `lancedb`, `faiss-node`.'
+---
+
+# `cache.similar()` — vector-based retrieval
+
+`cache.similar(vector, { topK, threshold?, tags? })` returns stored entries closest to `vector` by cosine similarity, ordered descending by score. Same `set` / `get` model — different lookup function.
+
+## Shape
+
+```ts
+// Index on the way in.
+await cache.set(key, value, { vector: number[], tags?, ttl? });
+
+// Query.
+const hits = await cache.similar<T>(queryVec, {
+  topK: number,        // required
+  threshold?: number,  // [0, 1]; hits below are dropped
+  tags?: string[],     // narrow candidate pool by tag (union)
+});
+// hits: { key: string; value: T; score: number }[]   // score in [0, 1]
+```
+
+## Capability matrix
+
+| Driver | `similar()` |
+|---|---|
+| `memory` / `memoryExtended` / `lru` | ✅ Brute force (O(N)) — dev only past ~10k entries |
+| `pg` *with* `options.pg.vector` | ✅ pgvector + HNSW/IVFFlat index |
+| `pg` *without* `options.pg.vector` | ❌ Throws `CacheUnsupportedError` |
+| `redis` | ❌ Throws (RediSearch on backlog) |
+| `file` | ❌ Throws |
+| `null` | Returns `[]` |
+
+## Always-true facts
+
+1. **Cache is embedding-agnostic.** Caller computes vectors. The cache stores and ranks; it doesn't call out to an embedder.
+2. **Only entries written with `set({ vector })` show up.** A plain `set` adds the entry as KV — invisible to `similar()`.
+3. **Score = cosine similarity** in `[0, 1]` for typical embedding spaces. The `pg` driver computes `1 - (embedding <=> $1::vector)` so the score matches the memory drivers.
+4. **Tag filter narrows the candidate pool *before* ranking** — union semantics (entry must carry at least one of the listed tags).
+5. **Dimension mismatch throws `CacheConfigurationError`** at both `set({ vector })` and `similar()` time. Don't switch embedders without re-indexing.
+6. **TTL + LRU eviction also drop the vector** — expired or evicted entries are invisible to `similar()`.
+
+## Recipes
+
+### Semantic cache for an LLM
+
+```ts
+const queryVec = await embed(prompt);
+const hits = await cache.similar<Answer>(queryVec, { topK: 1, threshold: 0.92 });
+
+if (hits.length > 0) {
+  return hits[0].value;     // skip the LLM call
+}
+
+const answer = await llm.complete(prompt);
+await cache.set(`q.${hash(prompt)}`, answer, {
+  vector: queryVec,
+  ttl: "30d",
+  tags: ["llm-cache"],
+});
+return answer;
+```
+
+### Tag-narrowed RAG
+
+```ts
+const hits = await cache.similar<Doc>(await embed(question), {
+  topK: 5,
+  threshold: 0.7,
+  tags: ["docs", `tenant.${tenantId}`],
+});
+```
+
+### Production swap — same code, different driver
+
+```ts
+// Dev:
+options: { memory: { ttl: "1h" } }
+
+// Prod — same set/similar calls; index now lives in pgvector:
+options: { pg: { client: pool, vector: { dimensions: 1536 } } }
+```
+
+See [`@warlock.js/cache/configure-pg-cache/SKILL.md`](@warlock.js/cache/configure-pg-cache/SKILL.md).
+
+## Things NOT to do
+
+- Don't use `cache.similar()` on a memory driver with 100k+ vectorized entries — it scales O(N) per query. Switch to `pg` with `vector` config.
+- Don't pass an empty array as `vector` — `cosineSimilarity` throws `CacheConfigurationError`.
+- Don't mix vector dimensions in the same driver — re-embed when models change.
+- Don't expect `similar()` to surface a missing vector (`set` without the `vector` option). Plain KV entries stay out of the similarity index.
+- Don't use `topK: 0` or negative — `pg` rejects with `CacheConfigurationError`; memory drivers return `[]` but it's a code smell.
+
+
+## use-cache-tags  `@warlock.js/cache/use-cache-tags/SKILL.md`
+
+---
+name: use-cache-tags
+description: 'Tag-based invalidation — attach tags on write, then cache.tags([...]).invalidate() drops every key bound to any of those tags. Triggers: `cache.tags`, `invalidate`, `cache.set` with `tags`; "invalidate every key tagged users", "drop everything for tenant 42", "bulk cache invalidation without knowing keys", "tag a cached value"; typical import `import { cache } from "@warlock.js/cache"`. Skip: prefix-based drop — `@warlock.js/cache/use-cache-namespace/SKILL.md`; HOF memoization with tags — `@warlock.js/cache/use-cached-hof/SKILL.md`; SWR — `@warlock.js/cache/use-swr/SKILL.md`; competing libs `cache-manager` tags, Next.js `revalidateTag`.'
+---
+
+# Tag-based invalidation
+
+Tags let you invalidate by a label rather than by enumerating every key. Use them when the set of keys to invalidate is not known ahead of time.
+
+## Attach tags on write
+
+```ts
+// Inline — terser when you know the tags up front
+await cache.set("user:1:profile", profile, { tags: ["users", "tenant-42"] });
+await cache.set("user:1:prefs",   prefs,   { tags: ["users", "tenant-42"] });
+
+// Fluent — useful when you already have a tagged handle
+const users = cache.tags(["users"]);
+await users.set("user:1", user);
+await users.set("user:2", otherUser);
+```
+
+## Invalidate
+
+```ts
+// Drop everything tagged "users"
+await cache.tags(["users"]).invalidate();
+
+// Multi-tag — matches either tag (union)
+await cache.tags(["tenant-42"]).invalidate();
+```
+
+Multi-tag is **union** semantics: an entry is invalidated if it carries **at least one** of the listed tags.
+
+## When to reach for tags vs namespaces
+
+| Use case | Reach for |
+| --- | --- |
+| The keys share a known prefix | `cache.removeNamespace("prefix")` ([`use-cache-namespace`](@warlock.js/cache/use-cache-namespace/SKILL.md)) |
+| The keys are spread across prefixes, tied by entity | Tags |
+| Both apply | Tags — more flexible; cheap on most drivers |
+
+Namespaces are cheaper (no reverse index). Tags are more powerful (any key can carry any tag).
+
+## Inline tag semantics
+
+Subsequent `set("user:1", ...)` with **no** `tags` leaves previous associations intact (the tag index still points to the key), but a `set(..., { tags: [...] })` adds to whatever index entries already exist rather than removing old tag bindings. Tag associations are additive at write-time.
+
+## Driver behavior
+
+| Driver | Tag invalidation |
+| --- | :-: |
+| `null` | noop |
+| `memory` / `memoryExtended` / `lru` / `file` | ✓ (reverse index in driver state) |
+| `redis` | ✓ |
+| `pg` | ✓ native via `GIN(tags)` index |
+
+## SWR with tags
+
+```ts
+await cache.swr(
+  `product.${id}`,
+  { freshTtl: "1m", staleTtl: "1h", tags: ["products", `tenant.${tenantId}`] },
+  () => db.products.find(id),
+);
+```
+
+Tags re-apply on every successful refresh — see [`@warlock.js/cache/use-swr/SKILL.md`](@warlock.js/cache/use-swr/SKILL.md).
+
+## `cached()` HOF with tags
+
+```ts
+const getUser = cached(fn, { key: (id) => `user.${id}`, ttl: "1h", tags: ["users"] });
+const getPosts = cached(fn, { key: (u) => `posts.by.${u}`, ttl: "30m", tags: ["users", "posts"] });
+
+await cache.tags(["users"]).invalidate();   // drops both wrappers' caches
+```
+
+See [`@warlock.js/cache/use-cached-hof/SKILL.md`](@warlock.js/cache/use-cached-hof/SKILL.md).
+
+## Things NOT to do
+
+- Don't tag aggressively. A reverse index per tag is cheap but not free — pick tags that actually correspond to invalidation events.
+- Don't expect tag invalidation to fire events for each affected key. It's a bulk op; the event bus emits one `flushed` or per-key `removed` per driver implementation. Test by reading back, not by counting events.
+- Don't use tags as a query mechanism. Tags drop keys; they don't list them. If you need "give me every user", store an index list separately.
+
+
+## use-cache-update-merge  `@warlock.js/cache/use-cache-update-merge/SKILL.md`
+
+---
+name: use-cache-update-merge
+description: 'Atomic read-modify-write via cache.update(key, fn) (callback receives current) or cache.merge(key, partial) (shallow merge). Per-key chain lock serializes concurrent in-process callers. Triggers: `cache.update`, `cache.merge`, `cache.increment`, `cache.pull`; "atomically update a cached counter", "change one field on a cached object", "avoid get-spread-set race", "serialize concurrent cache writers"; typical import `import { cache } from "@warlock.js/cache"`. Skip: cross-process locking — `@warlock.js/cache/use-cache-lock/SKILL.md`; conditional create/update — `@warlock.js/cache/configure-set-options/SKILL.md`; competing libs `lodash.merge`, raw redis `WATCH`/`MULTI`.'
+---
+
+# `update` and `merge` — atomic read-modify-write
+
+Prefer these over the ad-hoc `get → spread → set` pattern. Each call takes a per-key chain lock so concurrent callers in the same process are serialized end-to-end.
+
+## `update(key, fn, options?)`
+
+Read the current value, pass it to `fn`, write what `fn` returns.
+
+```ts
+// Counter increment
+await cache.update<number>("views", (current) => (current ?? 0) + 1);
+
+// Update nested state with defaults
+await cache.update<UserState>("user:1:state", (current) => ({
+  ...(current ?? defaultState),
+  lastSeenAt: Date.now(),
+}));
+
+// Conditional update — return null to remove
+await cache.update<Session>("session:abc", (current) => {
+  if (!current || current.expired) {
+    return null;          // removes the key
+  }
+  return { ...current, extendedAt: Date.now() };
+});
+```
+
+- `fn` receives `current: T | null`. Missing keys are `null`, not an exception.
+- Returning `null` **removes** the entry.
+- TTL is preserved by default. To reset, pass `{ ttl: "1h" }` as the 3rd arg.
+
+## `merge(key, partial, options?)`
+
+Shallow-merge sugar for the common "update one field" shape:
+
+```ts
+await cache.merge<User>("user:1", { name: "Jane" });
+await cache.merge<User>("user:1", { lastSeenAt: Date.now() }, { ttl: "1h" });
+```
+
+- **Shallow only.** Arrays are replaced wholesale. Nested objects overwrite.
+- Missing key → treats current as `{}`, creates with the partial.
+- Preserves existing TTL unless the options override is passed.
+
+Deep merge is not built in by design — too many edge cases with arrays and nullish values. If you need deep, write a custom `update(key, deepMerge(current, partial))`.
+
+## What you can't do
+
+- No JSONPath / dot-path partial updates (`update(key, "profile.name", "Jane")`). Use the callback form.
+- No file-driver support — both methods throw `CacheUnsupportedError` there. Use memory or redis.
+- No cross-process safety yet on Redis. The chain lock is in-process only. Cross-process safety requires `WATCH`/`MULTI` (tracked in `domains/cache/backlog.md` as a v2.1 follow-up). If two nodes run `update` on the same key simultaneously, last-write-wins.
+
+## Concurrent-in-process correctness
+
+```ts
+await cache.set("counter", 0);
+
+// 10 concurrent increments, all on the same key — all serialize
+await Promise.all(
+  Array.from({ length: 10 }, () =>
+    cache.update<number>("counter", (current) => (current ?? 0) + 1),
+  ),
+);
+
+await cache.get("counter");   // 10 — not a lost-update
+```
+
+The per-key lock map lives on the driver instance and is cleared after each chain link finishes. No leak.
+
+## When to reach for what
+
+| Task | Use |
+| --- | --- |
+| "Add 1 to this counter" | `increment()` (Redis-atomic via `INCRBY`; in-process elsewhere) |
+| "Change one field on a cached object" | `merge()` |
+| "Read-decide-maybe-write, possibly remove" | `update()` |
+| "Only set if missing" | `set(k, v, { onConflict: "create" })` |
+| "Only set if already exists" | `set(k, v, { onConflict: "update" })` |
+| "Read-then-delete atomically" | `pull()` |
+
+
+## use-cache-utils  `@warlock.js/cache/use-cache-utils/SKILL.md`
+
+---
+name: use-cache-utils
+description: 'Low-level cache utilities re-exported from @warlock.js/cache — parseTtl, expiresAtToTtl, resolveTtl, normalizeToOptions, normalizeToRememberOptions, parseCacheKey, mergeTagSets, injectTags, cosineSimilarity, and the CACHE_FOR TTL enum. Triggers: `parseTtl`, `parseCacheKey`, `resolveTtl`, `expiresAtToTtl`, `cosineSimilarity`, `mergeTagSets`, `injectTags`, `CACHE_FOR`; "parse a duration to seconds", "build a cache key from an object", "score two vectors", "common TTL constant"; typical import `import { parseTtl, CACHE_FOR } from "@warlock.js/cache"`. Skip: building a whole custom driver — `@warlock.js/cache/pick-cache-driver/SKILL.md`; the high-level set API — `@warlock.js/cache/configure-set-options/SKILL.md`.'
+---
+
+# Cache utilities
+
+The helpers the drivers are built from, all re-exported from
+`@warlock.js/cache`. You rarely need them at the call site — `cache.set("k", v,
+"1h")` parses the duration for you. They earn their keep when you write a custom
+driver or do cache-adjacent work outside the manager.
+
+## TTL helpers
+
+```ts
+import { parseTtl, expiresAtToTtl, resolveTtl } from "@warlock.js/cache";
+
+parseTtl(3600);        // 3600
+parseTtl("1h");        // 3600  (duration string via `ms`)
+parseTtl(Infinity);    // Infinity (no expiry)
+parseTtl(-5);          // throws CacheConfigurationError
+
+expiresAtToTtl(new Date(Date.now() + 60_000)); // ~60 (absolute → relative seconds)
+expiresAtToTtl(Date.now() - 1000);             // throws — deadline in the past
+
+// caller ttl > expiresAt > fallback; ttl+expiresAt together throws
+resolveTtl("1h", undefined, Infinity);         // 3600
+resolveTtl(undefined, undefined, 1800);        // 1800 (fallback)
+```
+
+## Option normalizers
+
+Coerce the polymorphic 2nd/3rd argument of `set`/`remember` into a uniform shape
+— what `BaseCacheDriver` uses internally:
+
+```ts
+import { normalizeToOptions, normalizeToRememberOptions } from "@warlock.js/cache";
+
+normalizeToOptions(60);                 // { ttl: 60 }
+normalizeToOptions("1h");               // { ttl: "1h" }
+normalizeToOptions({ tags: ["x"] });    // returned as-is
+normalizeToRememberOptions("1h");       // { ttl: "1h" }   (no expiresAt/onConflict)
+```
+
+## Key + tag helpers
+
+```ts
+import { parseCacheKey, mergeTagSets, injectTags } from "@warlock.js/cache";
+
+parseCacheKey("users:1");                       // "users.1"
+parseCacheKey({ page: 1, q: "John" });          // "page.1.q.John"
+parseCacheKey("user:1", { globalPrefix: "app" }); // "app.user.1"
+
+mergeTagSets(["a", "b"], ["b", "c"]);           // ["a","b","c"] (deduped union)
+mergeTagSets(undefined, undefined);             // undefined
+
+injectTags({ ttl: "1h" }, ["unread"]);          // { ttl: "1h", tags: ["unread"] } (pure, no mutation)
+```
+
+## Vector scoring
+
+```ts
+import { cosineSimilarity } from "@warlock.js/cache";
+
+cosineSimilarity([1, 0, 0], [1, 0, 0]); // 1
+cosineSimilarity([1, 0, 0], [0, 1, 0]); // 0
+cosineSimilarity([1, 2, 3], [1, 2]);    // throws — dimension mismatch
+```
+
+Powers the brute-force `cache.similar()` on the memory drivers — reach for it
+directly only when scoring vectors outside the cache.
+
+## TTL constants — `CACHE_FOR`
+
+```ts
+import { cache, CACHE_FOR } from "@warlock.js/cache";
+
+await cache.set("report", data, CACHE_FOR.ONE_WEEK);
+```
+
+Members: `HALF_HOUR`, `ONE_HOUR`, `HALF_DAY`, `ONE_DAY`, `ONE_WEEK`,
+`HALF_MONTH`, `ONE_MONTH`, `TWO_MONTHS`, `SIX_MONTHS`, `ONE_YEAR` (all seconds).
+For most call sites the duration string (`"1h"`, `"7d"`) reads better.
+
+## See also
+
+- [`@warlock.js/cache/configure-set-options/SKILL.md`](@warlock.js/cache/configure-set-options/SKILL.md) — the high-level `set` options these normalize
+- [`@warlock.js/cache/use-cache-similarity/SKILL.md`](@warlock.js/cache/use-cache-similarity/SKILL.md) — `cache.similar()`, which uses `cosineSimilarity`
+- [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md) — building a custom driver where these help
+
+
+## use-cached-hof  `@warlock.js/cache/use-cached-hof/SKILL.md`
+
+---
+name: use-cached-hof
+description: 'Wrap an async function with cached(fn, options) — declare the caching strategy once, call from many sites, get a bound .invalidate(...args) helper. Triggers: `cached`, `invalidate`, `key`, `ttl`, `tags`, `driver`; "wrap a DB lookup with caching", "memoize a function and invalidate by args", "one declaration many call sites", "auto-derive cache key from args"; typical import `import { cached } from "@warlock.js/cache"`. Skip: one-shot memoization — `@warlock.js/cache/apply-cache-patterns/SKILL.md` (`cache.remember`); tag bulk drop — `@warlock.js/cache/use-cache-tags/SKILL.md`; competing libs `p-memoize`, `mem`, `lodash.memoize`.'
+---
+
+# `cached()` — function-memoization wrapper
+
+`cached()` turns any async function into a memoized version. One declaration, many call sites, with a bound `.invalidate()` helper.
+
+## When to use
+
+Reach for `cached()` instead of `cache.remember()` when:
+- You have a function you'll call from many places.
+- You want the caching strategy declared once, not repeated at every call site.
+- You want `.invalidate()` available without manually deriving keys.
+
+Stick with `cache.remember()` for one-shot "get-or-compute" calls.
+
+## The three shapes — `fn` always first
+
+```ts
+import { cached } from "@warlock.js/cache";
+
+// 1. Prefix shorthand — driver default TTL; key auto-derived from args
+cached(fn, "user");
+
+// 2. Prefix + TTL
+cached(fn, "user", "1h");
+
+// 3. Options form — custom key fn, tags, per-call driver
+cached(fn, {
+  key: (id: number) => `user.${id}`,
+  ttl: "1h",
+  tags: ["users"],
+  driver: "redis",
+});
+```
+
+## Auto-key rules (shorthand only)
+
+| Args | Key |
+|------|-----|
+| None | `prefix` |
+| All primitives (incl. `null` / `undefined` / `bigint`) | `prefix.` + args joined with dots |
+| Any object / array arg | `prefix.` + `JSON.stringify(args)` |
+| Unserializable (circular / `BigInt` nested in object) | throws `CacheConfigurationError` |
+
+Footguns: order matters (`fn(1, 2)` and `fn(2, 1)` differ), `Date` → ISO string, `Map` / `Set` → `{}` (use the options form). When auto-key fails, use the options form with a custom `key` fn.
+
+## Return shape
+
+```ts
+type CachedFn<Args, R> = ((...args: Args) => Promise<R>) & {
+  invalidate(...args: Args): Promise<void>;
+};
+```
+
+`.refresh()` and `.peek()` are deferred to v2.1 — file demand in `backlog.md` if you need them.
+
+## Recipes
+
+### Cached DB lookup with write-side invalidation
+
+```ts
+const getUser = cached((id: number) => db.users.find(id), "user", "1h");
+
+// On update
+await db.users.update(42, patch);
+await getUser.invalidate(42);
+```
+
+### Tag-based bulk invalidation across wrappers
+
+```ts
+const getUser = cached(fn, { key: (id) => `user.${id}`, ttl: "1h", tags: ["users"] });
+const getPosts = cached(fn, { key: (u) => `posts.by.${u}`, ttl: "30m", tags: ["users", "posts"] });
+
+await cache.tags(["users"]).invalidate();   // drops both wrappers' caches
+```
+
+See [`@warlock.js/cache/use-cache-tags/SKILL.md`](@warlock.js/cache/use-cache-tags/SKILL.md).
+
+### Project a subset of args into the key
+
+```ts
+const getCategoryMeta = cached(
+  (filters: Filters) => db.categories.meta(filters.category),
+  { key: (f) => `category.meta.${f.category}`, ttl: "1h" },   // ignores `sort`, `page`
+);
+```
+
+## Interaction with the rest of the API
+
+- Uses `cache.remember()` internally → inherits stampede protection within a single Node process.
+- Forwards `tags` and `driver` through the (extended) `RememberOptions` shape on `remember`.
+- `.invalidate()` calls `cache.remove()` — no side effects beyond the single entry.
+
+## Things NOT to do
+
+- Don't wrap a function that has non-JSON-serializable args with the shorthand form. Use the options form and project a stable subset into the key.
+- Don't rely on cross-process stampede safety. `cached` inherits `remember`'s in-process lock; cross-process needs a distributed lock via `onConflict: "create"`.
+- Don't include secrets in args — they'd land in cache keys. Project only the identifying fields into the key.
+
+
+## use-swr  `@warlock.js/cache/use-swr/SKILL.md`
+
+---
+name: use-swr
+description: 'Stale-while-revalidate via cache.swr(key, {freshTtl, staleTtl}, fn) — returns cached instantly when fresh, returns cached + background refresh when stale, blocks only when fully expired. Triggers: `cache.swr`, `freshTtl`, `staleTtl`, `tags`, `driver`, `stale_at`; "serve stale while refreshing", "degrade when upstream is down", "never block on cache miss"; typical import `import { cache } from "@warlock.js/cache"`. Skip: block-until-fresh memoization — `@warlock.js/cache/apply-cache-patterns/SKILL.md`; observing refresh failures — `@warlock.js/cache/observe-cache/SKILL.md`; competing libs `swr` (React, client-side).'
+---
+
+# Stale-while-revalidate — `cache.swr(key, options, fn)`
+
+Returns the cached value immediately when it can; refreshes in the background when the value is getting old; only blocks when the entry is fully expired. The single biggest production-reliability win in the package — every cache miss past `freshTtl` becomes invisible to callers.
+
+## When to reach for it
+
+Use `cache.swr()` when **slightly-stale data is acceptable** and **the upstream is slow / occasionally fails**. That's most product-detail pages, dashboards, third-party API responses, expensive aggregations.
+
+Use `cache.remember()` when freshness is non-negotiable — auth, balances, billing, anything where the user must see the latest. Remember blocks every miss; SWR doesn't. See [`@warlock.js/cache/apply-cache-patterns/SKILL.md`](@warlock.js/cache/apply-cache-patterns/SKILL.md).
+
+## Three windows
+
+```
+   write              freshTtl              staleTtl
+     │                    │                    │
+     ▼                    ▼                    ▼
+─────┬──── fresh ─────────┬──── stale ─────────┬──── expired ──→
+     │  return cached     │  return cached +   │  block, refetch
+     │  no upstream call  │  bg refresh        │  like a miss
+```
+
+| Window | Behavior |
+|---|---|
+| `now < freshTtl` | Return cached. No upstream call. |
+| `freshTtl ≤ now < staleTtl` | Return cached immediately. Run `fn()` in background; next read sees the refreshed value. |
+| `now ≥ staleTtl` | Block on `fn()`. Same as `remember()`. |
+
+## API
+
+```ts
+await cache.swr(
+  "product.42",
+  {
+    freshTtl: "1m",          // CacheTtl — within this, no upstream call
+    staleTtl: "1h",          // CacheTtl — past this, block-and-refetch
+    tags?: string[],         // applied on first miss + every successful refresh
+    driver?: string,         // per-call driver override, like remember()
+  },
+  () => db.products.find(42),
+);
+```
+
+`staleTtl` MUST be greater than `freshTtl` — otherwise throws.
+
+## Key invariants
+
+1. **Concurrent stale-window callers share one refresh.** Per-key dedupe via the driver's existing locks map — no thundering herd on background refresh.
+2. **Failed background refreshes preserve the stale entry.** No retry storm; the next stale-window read tries again. Failures emit `error` events for observability.
+3. **The caller never sees a refresh failure.** If you returned the stale value, you got your data — failures only show up via `cache.on("error", ...)`. See [`@warlock.js/cache/observe-cache/SKILL.md`](@warlock.js/cache/observe-cache/SKILL.md).
+4. **Tags compose.** Per-call tags + scope tags (when via `cache.namespace().swr(...)`) merge additively.
+5. **Scope `ttl` defaults are NOT applied to SWR.** `freshTtl` / `staleTtl` always come from the call site.
+
+## Driver support
+
+| Driver | Background refresh |
+|---|---|
+| memory / memoryExtended / lru / file / mock | ✅ Full |
+| redis | ✅ Full (sidecar key for staleAt — backwards-compatible) |
+| pg | ✅ Full (`stale_at TIMESTAMPTZ` column — provision via `driver.schema()`) |
+| null | ❌ Always-fetch (null caches nothing) |
+
+## Common shapes
+
+```ts
+// Product detail — slightly stale OK, never want to block on DB
+await cache.swr(`product.${id}`, { freshTtl: "1m", staleTtl: "1h" }, () =>
+  db.products.findById(id),
+);
+
+// Dashboard — expensive aggregation, OK to be 5min stale
+await cache.swr(`dashboard.${tenantId}`, { freshTtl: "5m", staleTtl: "1h" }, () =>
+  computeKPIs(tenantId),
+);
+
+// Third-party API — degrade gracefully when upstream is down
+await cache.swr("exchange.rates", { freshTtl: "10m", staleTtl: "24h" }, () =>
+  fetchFromForexAPI(),
+);
+```
+
+## Through scoped caches
+
+```ts
+const feed = cache.namespace(`feed.${userId}`, { tags: [`user.${userId}`] });
+
+await feed.swr(
+  "home",
+  { freshTtl: "30s", staleTtl: "10m", tags: ["computed"] },
+  () => buildHomeFeed(userId),
+);
+// stored at feed.<userId>.home, tagged [user.<userId>, computed]
+```
+
+## Things NOT to do
+
+- Don't use SWR when the user must see the latest data (auth, billing). Use `remember()` instead — block-until-fresh is the right semantic there.
+- Don't pick `freshTtl` to be the *same* as `staleTtl` thinking it disables the stale window — that throws. Pick a tight `freshTtl` and wider `staleTtl` that reflects how stale your product can tolerate being.
+- Don't ignore `error` events. A persistent stream of refresh failures means upstream is broken and the cache is masking it.
+- Don't reach for SWR on the null driver — it caches nothing, so SWR always blocks.
+
+

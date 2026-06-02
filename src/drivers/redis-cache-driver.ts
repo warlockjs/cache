@@ -1,7 +1,15 @@
 import { log } from "@warlock.js/logger";
 import type { createClient } from "redis";
-import type { CacheDriver, CacheKey, RedisOptions } from "../types";
-import { CacheConfigurationError } from "../types";
+import type {
+  CacheData,
+  CacheDriver,
+  CacheKey,
+  CacheSetOptions,
+  CacheSetResult,
+  CacheTtl,
+  RedisOptions,
+} from "../types";
+import { CacheConfigurationError, CacheUnsupportedError } from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
 
 // ============================================================
@@ -95,28 +103,131 @@ export class RedisCacheDriver
   /**
    * {@inheritDoc}
    */
-  public async set(key: CacheKey, value: any, ttl?: number) {
-    key = this.parseKey(key);
+  public async set(
+    key: CacheKey,
+    value: any,
+    ttlOrOptions?: CacheTtl | CacheSetOptions,
+  ): Promise<any> {
+    const parsedKey = this.parseKey(key);
+    const { ttl, tags, onConflict, vector, staleAt } = this.resolveSetOptions(ttlOrOptions);
 
-    this.log("caching", key);
-
-    if (ttl === undefined) {
-      ttl = this.ttl;
+    if (vector) {
+      throw new CacheUnsupportedError(
+        "'redis' driver does not yet support similarity retrieval. Phase 2 (RediSearch) is on the backlog — use a memory driver or the 'pg' driver (with pgvector) for now.",
+      );
     }
 
-    // Use Redis native expiration instead of manual checking
-    if (ttl && ttl !== Infinity) {
-      await this.client?.set(key, JSON.stringify(value), { EX: ttl });
+    this.log("caching", parsedKey);
+
+    const serialized = JSON.stringify(value);
+    const hasExpiry = Boolean(ttl) && ttl !== Infinity;
+
+    let reply: string | null | undefined;
+
+    if (onConflict === "create") {
+      const options: { NX: true; EX?: number } = { NX: true };
+      if (hasExpiry) {
+        options.EX = ttl as number;
+      }
+      reply = await this.client?.set(parsedKey, serialized, options);
+    } else if (onConflict === "update") {
+      const options: { XX: true; EX?: number } = { XX: true };
+      if (hasExpiry) {
+        options.EX = ttl as number;
+      }
+      reply = await this.client?.set(parsedKey, serialized, options);
+    } else if (hasExpiry) {
+      reply = await this.client?.set(parsedKey, serialized, { EX: ttl as number });
     } else {
-      await this.client?.set(key, JSON.stringify(value));
+      reply = await this.client?.set(parsedKey, serialized);
     }
 
-    this.log("cached", key);
+    const wasSet = reply === "OK";
 
-    // Emit set event
-    await this.emit("set", { key, value, ttl });
+    if ((onConflict === "create" || onConflict === "update") && !wasSet) {
+      const existing = onConflict === "create" ? ((await this.get(key)) as any) : null;
+      return { wasSet: false, existing } satisfies CacheSetResult;
+    }
+
+    if (tags && tags.length > 0) {
+      await this.applyTags(parsedKey, tags);
+    }
+
+    if (staleAt !== undefined) {
+      // Sidecar key for SWR freshness — keeps the main value JSON
+      // backwards-compatible with entries written before SWR landed.
+      const sidecarOptions: { EX?: number } = {};
+
+      if (hasExpiry) {
+        sidecarOptions.EX = ttl as number;
+      }
+
+      await this.client?.set(this.swrMetaKey(parsedKey), String(staleAt), sidecarOptions);
+    }
+
+    this.log("cached", parsedKey);
+
+    await this.emit("set", { key: parsedKey, value, ttl });
+
+    if (onConflict === "create" || onConflict === "update") {
+      return { wasSet: true, existing: null } satisfies CacheSetResult;
+    }
 
     return value;
+  }
+
+  /**
+   * Build the sidecar key Redis uses to track SWR freshness without
+   * wrapping the main value JSON.
+   */
+  protected swrMetaKey(parsedKey: string): string {
+    return `__swrmeta:${parsedKey}`;
+  }
+
+  /**
+   * Read the raw {@link CacheData} wrapper, fetching the value and the
+   * SWR sidecar in parallel. Returns `null` when the main key is missing
+   * or expired (Redis handles expiry natively, so the absence of the
+   * value alone tells us).
+   */
+  protected async getEntry(key: CacheKey): Promise<CacheData | null> {
+    const parsedKey = this.parseKey(key);
+
+    const [valueRaw, staleAtRaw] = await Promise.all([
+      this.client?.get(parsedKey),
+      this.client?.get(this.swrMetaKey(parsedKey)),
+    ]);
+
+    if (!valueRaw) {
+      return null;
+    }
+
+    const data = JSON.parse(valueRaw);
+    const staleAt = staleAtRaw ? Number(staleAtRaw) : undefined;
+
+    return staleAt !== undefined ? { data, staleAt } : { data };
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Redis tracks expiry natively (the payload carries no `expiresAt`), so read
+   * the remaining lifetime with the `TTL` command. Redis returns `-2` for a
+   * missing key and `-1` for a key with no expiry.
+   */
+  protected async getRemainingTtl(key: CacheKey): Promise<number | undefined> {
+    const parsedKey = this.parseKey(key);
+    const ttl = await this.client?.ttl(parsedKey);
+
+    if (ttl === undefined || ttl === -2) {
+      return undefined;
+    }
+
+    if (ttl === -1) {
+      return Infinity;
+    }
+
+    return ttl;
   }
 
   /**
@@ -174,11 +285,12 @@ export class RedisCacheDriver
 
     this.log("removing", key);
 
-    await this.client?.del(key);
+    // Drop the SWR sidecar alongside the main key — keeps metadata from
+    // surviving a `remove` and confusing a later `swr` read.
+    await this.client?.del([key, this.swrMetaKey(key)]);
 
     this.log("removed", key);
 
-    // Emit removed event
     await this.emit("removed", { key });
   }
 
@@ -249,13 +361,20 @@ export class RedisCacheDriver
 
   /**
    * {@inheritDoc}
+   *
+   * Guards against disconnecting when the client was never created. The base
+   * `client` getter falls back to `this` when no client is set, so we check
+   * the backing `clientDriver` directly — using `this.client` for this guard
+   * would always be truthy and crash with "this.quit is not a function".
    */
   public async disconnect() {
-    if (!this.client) return;
+    if (!this.clientDriver) {
+      return;
+    }
 
     this.log("disconnecting");
 
-    await this.client.quit();
+    await this.clientDriver.quit();
 
     this.log("disconnected");
     await this.emit("disconnected");

@@ -1,5 +1,6 @@
 import { get } from "@mongez/reinforcements";
 import type { CacheData, CacheDriver, CacheKey, MemoryExtendedCacheOptions } from "../types";
+import { parseTtl } from "../utils";
 import { MemoryCacheDriver } from "./memory-cache-driver";
 
 export class MemoryExtendedCacheDriver
@@ -26,7 +27,8 @@ export class MemoryExtendedCacheDriver
       return null;
     }
 
-    const ttl = value.ttl || this.options.ttl;
+    const rawTtl = value.ttl ?? this.options.ttl;
+    const ttl = rawTtl !== undefined ? parseTtl(rawTtl) : undefined;
 
     if (ttl) {
       // reset the expiration time

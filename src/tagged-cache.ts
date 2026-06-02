@@ -1,4 +1,10 @@
-import type { CacheDriver, CacheKey, TaggedCacheDriver } from "./types";
+import type {
+  CacheDriver,
+  CacheKey,
+  CacheSetOptions,
+  CacheTtl,
+  TaggedCacheDriver,
+} from "./types";
 
 /**
  * Tagged Cache Wrapper
@@ -34,13 +40,23 @@ export class TaggedCache implements TaggedCacheDriver {
    * Store tag-key relationship
    */
   protected async storeTaggedKey(key: string): Promise<void> {
+    await this.storeTagRelationship(key);
+  }
+
+  /**
+   * Public alias of the tag-index writer. Called by `BaseCacheDriver.applyTags`
+   * when tags are passed inline through `CacheSetOptions.tags`.
+   *
+   * @internal — public for cross-class use within this package; not part of the
+   * stable consumer API.
+   */
+  public async storeTagRelationship(parsedKey: string): Promise<void> {
     for (const tag of this.cacheTags) {
       const tagKey = this.tagKey(tag);
       const keys = (await this.driver.get(tagKey)) || [];
 
-      if (!keys.includes(key)) {
-        keys.push(key);
-        // Store tag relationships permanently
+      if (!keys.includes(parsedKey)) {
+        keys.push(parsedKey);
         await this.driver.set(tagKey, keys, Infinity);
       }
     }
@@ -67,13 +83,15 @@ export class TaggedCache implements TaggedCacheDriver {
   /**
    * {@inheritdoc}
    */
-  public async set(key: CacheKey, value: any, ttl?: number): Promise<any> {
+  public async set(
+    key: CacheKey,
+    value: any,
+    ttlOrOptions?: CacheTtl | CacheSetOptions,
+  ): Promise<any> {
     const parsedKey = this.driver.parseKey(key);
 
-    // Store the value
-    await this.driver.set(key, value, ttl);
+    await this.driver.set(key, value, ttlOrOptions);
 
-    // Store tag-key relationship
     await this.storeTaggedKey(parsedKey);
 
     return value;

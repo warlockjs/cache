@@ -1,15 +1,67 @@
 import { log } from "@warlock.js/logger";
+import { MemoryCacheList } from "../list/memory-cache-list";
 import { TaggedCache } from "../tagged-cache";
 import type {
+  CacheConflictPolicy,
   CacheData,
   CacheDriver,
   CacheEventData,
   CacheEventHandler,
   CacheEventType,
   CacheKey,
+  CacheListAccessor,
   CacheOperationType,
+  CacheSetOptions,
+  CacheSetResult,
+  CacheSimilarHit,
+  CacheSimilarOptions,
+  CacheSwrOptions,
+  CacheTtl,
+  LockOptions,
+  LockOutcome,
+  RememberOptions,
 } from "../types";
-import { parseCacheKey } from "../utils";
+import { CacheUnsupportedError } from "../types";
+import { normalizeToOptions, parseCacheKey, parseTtl, resolveTtl } from "../utils";
+
+/**
+ * Normalized form of the 3rd `set` argument.
+ *
+ * All drivers operate on this shape internally regardless of whether the caller
+ * passed a positional TTL, a duration string, or a rich options object.
+ */
+export type NormalizedSetOptions = {
+  /**
+   * Final TTL in seconds — already merged with the driver-level default
+   * (`this.options.ttl`). `Infinity` means "no expiration".
+   *
+   * Always populated. Drivers do NOT need to fall back to `this.ttl`
+   * themselves — `resolveSetOptions` does the merge centrally so that
+   * every driver respects the configured default without ceremony.
+   */
+  ttl: number;
+  /**
+   * Inline tag list, or undefined when none were provided.
+   */
+  tags?: string[];
+  /**
+   * Conflict policy. Defaults to `"upsert"`.
+   */
+  onConflict: CacheConflictPolicy;
+  /**
+   * Optional embedding vector for similarity retrieval. Drivers that do not
+   * support similarity must throw {@link CacheUnsupportedError} when this is
+   * present (rather than silently dropping it).
+   */
+  vector?: number[];
+  /**
+   * Optional freshness deadline as a millisecond timestamp. Set by `swr()`
+   * to mark when the entry stops being "fresh" and becomes
+   * "stale-but-revalidatable." Drivers route this through
+   * `prepareDataForStorage` so it persists in the wrapper.
+   */
+  staleAt?: number;
+};
 
 const messages = {
   clearing: "Clearing namespace",
@@ -170,7 +222,69 @@ export abstract class BaseCacheDriver<
   /**
    * {@inheritdoc}
    */
-  public abstract set(key: CacheKey, value: any, ttl?: number): Promise<any>;
+  public abstract set(
+    key: CacheKey,
+    value: any,
+    ttlOrOptions?: CacheTtl | CacheSetOptions,
+  ): Promise<any>;
+
+  /**
+   * Normalize the 3rd argument of a `set` call into a single shape every driver
+   * can act on. Handles TTL parsing (number | string | Infinity), `expiresAt` →
+   * relative TTL conversion, and mutual-exclusion validation.
+   *
+   * @throws {CacheConfigurationError} when `ttl` and `expiresAt` are passed together
+   * or an unparseable duration string is supplied.
+   */
+  protected resolveSetOptions(
+    ttlOrOptions?: CacheTtl | CacheSetOptions,
+  ): NormalizedSetOptions {
+    const options = normalizeToOptions(ttlOrOptions);
+
+    return {
+      ttl: resolveTtl(options.ttl, options.expiresAt, this.ttl),
+      tags: options.tags,
+      onConflict: options.onConflict ?? "upsert",
+      vector: options.vector,
+      staleAt: options.staleAt,
+    };
+  }
+
+  /**
+   * Resolve the union of cache keys associated with any of the given tags.
+   * Used by `similar()` to narrow the candidate pool before similarity ranking.
+   *
+   * Returns `null` when no tags are passed (callers should treat that as "no filter").
+   */
+  protected async getKeysForTags(tags: string[] | undefined): Promise<Set<string> | null> {
+    if (!tags || tags.length === 0) {
+      return null;
+    }
+
+    const allKeys = new Set<string>();
+    for (const tag of tags) {
+      const tagKey = `cache:tags:${tag}`;
+      const keys = ((await this.get(tagKey)) as string[] | null) || [];
+      for (const k of keys) {
+        allKeys.add(k);
+      }
+    }
+
+    return allKeys;
+  }
+
+  /**
+   * Apply tag relationships after a successful write. Called by drivers once
+   * the value is in storage.
+   */
+  protected async applyTags(parsedKey: string, tags: string[]): Promise<void> {
+    if (tags.length === 0) {
+      return;
+    }
+
+    const tagged = this.tags(tags);
+    await (tagged as TaggedCache).storeTagRelationship(parsedKey);
+  }
 
   /**
    * {@inheritdoc}
@@ -204,25 +318,31 @@ export abstract class BaseCacheDriver<
   /**
    * {@inheritdoc}
    */
-  public async remember(key: CacheKey, ttl: number, callback: () => Promise<any>): Promise<any> {
+  public async remember(
+    key: CacheKey,
+    ttlOrOptions: CacheTtl | RememberOptions,
+    callback: () => Promise<any>,
+  ): Promise<any> {
     const parsedKey = this.parseKey(key);
 
-    // Check cache first
+    // The options-form lets callers forward tags / driver-override through to
+    // the cache-miss write. Normalize both shapes into a single CacheSetOptions
+    // blob so there's one path from here on.
+    const setOptions = this.normalizeRememberOptions(ttlOrOptions);
+
     const cachedValue = await this.get(key);
     if (cachedValue) {
       return cachedValue;
     }
 
-    // Check if another request is already computing this value
     const existingLock = this.locks.get(parsedKey);
     if (existingLock) {
       return existingLock;
     }
 
-    // Create lock and compute value
     const promise = callback()
       .then(async (result) => {
-        await this.set(key, result, ttl);
+        await this.set(key, result, setOptions);
         this.locks.delete(parsedKey);
         return result;
       })
@@ -233,6 +353,182 @@ export abstract class BaseCacheDriver<
 
     this.locks.set(parsedKey, promise);
     return promise;
+  }
+
+  /**
+   * Resolve the TTL-or-options arg of `remember` into a `CacheSetOptions` object
+   * that can be passed straight to `set()`. Keeps the implementation unbranched.
+   */
+  protected normalizeRememberOptions(
+    ttlOrOptions: CacheTtl | RememberOptions,
+  ): CacheSetOptions {
+    if (typeof ttlOrOptions === "number" || typeof ttlOrOptions === "string") {
+      return { ttl: ttlOrOptions };
+    }
+
+    return {
+      ttl: ttlOrOptions.ttl,
+      tags: ttlOrOptions.tags,
+    };
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Default implementation: read raw entry, branch on freshness/staleness,
+   * trigger background refresh in the stale window, fall through to
+   * `callback` on miss/expiry. Concurrent stale-window callers share a
+   * single in-flight refresh via {@link locks}.
+   *
+   * Drivers without a real {@link getEntry} override degrade gracefully —
+   * the synthetic entry has no `staleAt`, which the freshness check treats
+   * as "always fresh," so SWR behaves like a TTL-only cached read on those
+   * drivers (no background refresh, but no double-fetch either).
+   */
+  public async swr<T = any>(
+    key: CacheKey,
+    options: CacheSwrOptions,
+    callback: () => Promise<T>,
+  ): Promise<T> {
+    const parsedKey = this.parseKey(key);
+    const freshSeconds = parseTtl(options.freshTtl);
+    const staleSeconds = parseTtl(options.staleTtl);
+
+    if (staleSeconds <= freshSeconds) {
+      throw new Error(
+        `cache.swr: 'staleTtl' (${staleSeconds}s) must be greater than 'freshTtl' (${freshSeconds}s).`,
+      );
+    }
+
+    const entry = await this.getEntry(key);
+    const now = Date.now();
+
+    const isExpired = entry?.expiresAt !== undefined && entry.expiresAt <= now;
+
+    if (!entry || isExpired) {
+      return this.swrFetchAndStore<T>(key, options, callback, freshSeconds, staleSeconds);
+    }
+
+    const isFresh = entry.staleAt === undefined || entry.staleAt > now;
+
+    if (isFresh) {
+      return entry.data as T;
+    }
+
+    this.scheduleSwrRefresh<T>(parsedKey, key, options, callback, freshSeconds, staleSeconds);
+
+    return entry.data as T;
+  }
+
+  /**
+   * Read the raw {@link CacheData} wrapper for a key, including any
+   * `expiresAt` / `staleAt` metadata. Default implementation falls back to
+   * `get()` and synthesizes a metadata-less wrapper — drivers that store
+   * the wrapper directly (memory, lru, file, redis, pg, mock) override
+   * this to return real metadata so SWR can branch on freshness.
+   */
+  protected async getEntry(key: CacheKey): Promise<CacheData | null> {
+    const value = await this.get(key);
+
+    if (value === null) {
+      return null;
+    }
+
+    return { data: value };
+  }
+
+  /**
+   * Remaining lifetime of an existing entry, in seconds — used by TTL-preserving
+   * writes such as `update()` / `merge()` when the caller passes no explicit
+   * `ttl`.
+   *
+   * - `Infinity` — the entry exists with no expiry (preserve "never expires").
+   * - positive number — seconds left before the entry expires.
+   * - `undefined` — the key is missing or already past its deadline; the caller
+   *   should fall back to the driver default TTL.
+   *
+   * Default reads `expiresAt` from {@link getEntry}, which the metadata-aware
+   * drivers (memory, lru, mock, pg) populate. Drivers that track TTL natively
+   * and don't carry `expiresAt` in their payload (Redis) override this.
+   */
+  protected async getRemainingTtl(key: CacheKey): Promise<number | undefined> {
+    const entry = await this.getEntry(key);
+
+    if (!entry) {
+      return undefined;
+    }
+
+    if (!entry.expiresAt || entry.expiresAt === Infinity) {
+      return Infinity;
+    }
+
+    const remainingSeconds = Math.ceil((entry.expiresAt - Date.now()) / 1000);
+
+    return remainingSeconds > 0 ? remainingSeconds : undefined;
+  }
+
+  /**
+   * Block-and-fetch path of `swr()`: invoked on miss or past-`staleTtl`
+   * expiry. Writes through `set()` with the SWR options translated into
+   * standard `CacheSetOptions` (ttl = staleTtl, staleAt = now + freshTtl).
+   */
+  protected async swrFetchAndStore<T>(
+    key: CacheKey,
+    options: CacheSwrOptions,
+    callback: () => Promise<T>,
+    freshSeconds: number,
+    staleSeconds: number,
+  ): Promise<T> {
+    const result = await callback();
+
+    await this.set(key, result, {
+      ttl: staleSeconds,
+      staleAt: Date.now() + freshSeconds * 1000,
+      tags: options.tags,
+    });
+
+    return result;
+  }
+
+  /**
+   * Stale-window background refresh. Registers a single in-flight promise
+   * per parsed key so concurrent SWR callers share one refresh. Failed
+   * refreshes preserve the stale entry, log via `logError`, and emit on
+   * `error` — the stale-returning caller never sees the failure.
+   */
+  protected scheduleSwrRefresh<T>(
+    parsedKey: string,
+    key: CacheKey,
+    options: CacheSwrOptions,
+    callback: () => Promise<T>,
+    freshSeconds: number,
+    staleSeconds: number,
+  ): void {
+    if (this.locks.has(parsedKey)) {
+      return;
+    }
+
+    let refresh!: Promise<void>;
+    refresh = (async () => {
+      try {
+        const result = await callback();
+
+        await this.set(key, result, {
+          ttl: staleSeconds,
+          staleAt: Date.now() + freshSeconds * 1000,
+          tags: options.tags,
+        });
+      } catch (error) {
+        this.logError(`SWR background refresh failed for ${parsedKey}`, error);
+        await this.emit("error", { key: parsedKey, error });
+      } finally {
+        if (this.locks.get(parsedKey) === refresh) {
+          this.locks.delete(parsedKey);
+        }
+      }
+    })();
+
+    this.locks.set(parsedKey, refresh);
   }
 
   /**
@@ -333,10 +629,15 @@ export abstract class BaseCacheDriver<
   }
 
   /**
-   * Get time to live value
+   * Get the default TTL in seconds. Parses human-readable strings (`"1h"`, `"30m"`)
+   * from driver options if present; falls back to `Infinity` when no default is set.
    */
   public get ttl() {
-    return this.options.ttl !== undefined ? this.options.ttl : Infinity;
+    if (this.options.ttl === undefined) {
+      return Infinity;
+    }
+
+    return parseTtl(this.options.ttl);
   }
 
   /**
@@ -349,9 +650,11 @@ export abstract class BaseCacheDriver<
   }
 
   /**
-   * Prepare data for storage
+   * Wrap a value with TTL and optional freshness metadata for backend
+   * storage. `staleAt` persists alongside `expiresAt` when supplied — used
+   * by the SWR flow to mark when the entry stops being fresh.
    */
-  protected prepareDataForStorage(data: any, ttl?: number) {
+  protected prepareDataForStorage(data: any, ttl?: number, staleAt?: number) {
     const preparedData: CacheData = {
       data,
     };
@@ -359,6 +662,10 @@ export abstract class BaseCacheDriver<
     if (ttl) {
       preparedData.ttl = ttl;
       preparedData.expiresAt = this.getExpiresAt(ttl);
+    }
+
+    if (staleAt !== undefined) {
+      preparedData.staleAt = staleAt;
     }
 
     return preparedData;
@@ -423,5 +730,167 @@ export abstract class BaseCacheDriver<
    */
   public tags(tags: string[]): any {
     return new TaggedCache(tags, this);
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Default implementation: read → transform → write under a per-key in-process
+   * lock. Drivers that can offer stronger semantics (Redis via `WATCH`/`MULTI`)
+   * should override.
+   */
+  public async update<T = any>(
+    key: CacheKey,
+    fn: (current: T | null) => T | null | Promise<T | null>,
+    options: { ttl?: CacheTtl } = {},
+  ): Promise<T | null> {
+    const parsedKey = this.parseKey(key);
+
+    // Chain each update onto the previous one for the same key so concurrent
+    // callers are serialized end-to-end, not merely awakened together when an
+    // earlier lock resolves.
+    const previous = this.locks.get(parsedKey) ?? Promise.resolve();
+
+    const next = previous.catch(() => undefined).then(async () => {
+      const current = (await this.get(key)) as T | null;
+      const result = await fn(current);
+
+      if (result === null) {
+        await this.remove(key);
+        return null;
+      }
+
+      if (options.ttl !== undefined) {
+        await this.set(key, result, { ttl: options.ttl });
+
+        return result;
+      }
+
+      // No explicit TTL → preserve the existing entry's remaining lifetime
+      // rather than resetting it to the driver default.
+      const remainingTtl = await this.getRemainingTtl(key);
+
+      if (remainingTtl !== undefined) {
+        await this.set(key, result, { ttl: remainingTtl });
+      } else {
+        await this.set(key, result);
+      }
+
+      return result;
+    });
+
+    this.locks.set(parsedKey, next);
+
+    // Clean up the slot once this link finishes — but only if nobody chained
+    // a follow-up onto it in the meantime.
+    next.finally(() => {
+      if (this.locks.get(parsedKey) === next) {
+        this.locks.delete(parsedKey);
+      }
+    });
+
+    return next;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async merge<T extends Record<string, any> = Record<string, any>>(
+    key: CacheKey,
+    partial: Partial<T>,
+    options: { ttl?: CacheTtl } = {},
+  ): Promise<T> {
+    const result = await this.update<T>(
+      key,
+      (current) => {
+        const base = (current ?? {}) as T;
+        return { ...base, ...partial } as T;
+      },
+      options,
+    );
+
+    return result as T;
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Default implementation: read-mutate-write array backed by the underlying
+   * cache entry. Concrete drivers (e.g. Redis) override with native commands.
+   */
+  public list<T = any>(key: CacheKey): CacheListAccessor<T> {
+    return new MemoryCacheList<T>(this, key);
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Built on top of `set({ onConflict: "create" })` — Redis-native `SET … NX EX`
+   * under the hood on Redis, emulated via key-existence check on other drivers.
+   * The lock value is the resolved `owner` (defaults to `pid.<process.pid>`).
+   *
+   * Always releases in `finally`, even if `fn` throws — the thrown error
+   * propagates to the caller unchanged.
+   */
+  public async lock<T>(
+    key: CacheKey,
+    ttlOrOptions: CacheTtl | Omit<LockOptions, "driver">,
+    fn: () => Promise<T>,
+  ): Promise<LockOutcome<T>> {
+    const { ttl, owner } = this.normalizeLockOptions(ttlOrOptions);
+    const lockOwner = owner ?? `pid.${process.pid}`;
+
+    const setResult = (await this.set(key, lockOwner, {
+      onConflict: "create",
+      ttl,
+    })) as CacheSetResult | unknown;
+
+    // `onConflict` drivers return CacheSetResult. Drivers that no-op on set
+    // (e.g. the null driver) may return anything else — treat that as
+    // "acquired" since there's nothing to collide with.
+    const wasSet =
+      typeof setResult === "object" && setResult !== null && "wasSet" in setResult
+        ? (setResult as CacheSetResult).wasSet
+        : true;
+
+    if (!wasSet) {
+      return { acquired: false };
+    }
+
+    try {
+      const value = await fn();
+      return { acquired: true, value };
+    } finally {
+      await this.remove(key);
+    }
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Default implementation throws {@link CacheUnsupportedError}. Drivers that
+   * support similarity retrieval (memory family, `pg`, `redis` w/ RediSearch)
+   * override this with a real impl.
+   */
+  public async similar<T = any>(
+    _vector: number[],
+    _options: CacheSimilarOptions,
+  ): Promise<CacheSimilarHit<T>[]> {
+    throw new CacheUnsupportedError(
+      `'${this.name}' driver does not support similarity retrieval. Use a memory driver, 'pg' (with pgvector), or 'redis' (with RediSearch).`,
+    );
+  }
+
+  /**
+   * Resolve the TTL-or-options arg of `lock` into a uniform shape.
+   */
+  protected normalizeLockOptions(
+    ttlOrOptions: CacheTtl | Omit<LockOptions, "driver">,
+  ): { ttl: CacheTtl; owner?: string } {
+    if (typeof ttlOrOptions === "number" || typeof ttlOrOptions === "string") {
+      return { ttl: ttlOrOptions };
+    }
+
+    return { ttl: ttlOrOptions.ttl, owner: ttlOrOptions.owner };
   }
 }

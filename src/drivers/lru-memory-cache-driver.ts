@@ -1,10 +1,31 @@
-import type { CacheDriver, CacheKey, LRUMemoryCacheOptions } from "../types";
+import type {
+  CacheData,
+  CacheDriver,
+  CacheKey,
+  CacheSetOptions,
+  CacheSetResult,
+  CacheSimilarHit,
+  CacheSimilarOptions,
+  CacheTtl,
+  LRUMemoryCacheOptions,
+} from "../types";
+import { cosineSimilarity } from "../utils";
 import { BaseCacheDriver } from "./base-cache-driver";
 
 class CacheNode {
   public next: CacheNode | null = null;
   public prev: CacheNode | null = null;
   public expiresAt?: number;
+  /**
+   * Freshness deadline (ms timestamp) — populated by `swr()`. Within
+   * `expiresAt > now > staleAt` the entry is "stale-but-revalidatable."
+   */
+  public staleAt?: number;
+  /**
+   * Optional embedding vector — populated when the entry was written with
+   * `set({ vector })`. Scanned by `similar()`.
+   */
+  public vector?: number[];
   public constructor(
     public key: string,
     public value: any,
@@ -110,38 +131,106 @@ export class LRUMemoryCacheDriver
 
   /**
    * {@inheritdoc}
+   *
+   * Clears every entry whose key starts with the parsed namespace (followed
+   * by a dot) or equals it exactly. Called with an empty namespace while a
+   * `globalPrefix` is configured, clears everything under the prefix — which
+   * is how `flush()` scopes cleanup per tenant.
    */
-  public async removeNamespace(_namespace: string) {
-    throw new Error("Namespace is not supported in LRU cache driver.");
+  public async removeNamespace(namespace: string) {
+    const parsedNamespace = this.parseKey(namespace);
+
+    this.log("clearing", parsedNamespace || "(all)");
+
+    const removed: string[] = [];
+
+    if (parsedNamespace === "") {
+      for (const key of this.cache.keys()) {
+        removed.push(key);
+      }
+    } else {
+      const prefix = parsedNamespace + ".";
+
+      for (const key of this.cache.keys()) {
+        if (key === parsedNamespace || key.startsWith(prefix)) {
+          removed.push(key);
+        }
+      }
+    }
+
+    for (const key of removed) {
+      const node = this.cache.get(key);
+      if (node) {
+        this.removeNode(node);
+        this.cache.delete(key);
+      }
+      await this.emit("removed", { key });
+    }
+
+    this.log("cleared", parsedNamespace || "(all)");
+
+    return removed;
   }
 
   /**
    * {@inheritdoc}
    */
-  public async set(key: CacheKey, value: any, ttl?: number) {
-    key = this.parseKey(key);
+  public async set(
+    key: CacheKey,
+    value: any,
+    ttlOrOptions?: CacheTtl | CacheSetOptions,
+  ): Promise<any> {
+    const parsedKey = this.parseKey(key);
+    const { ttl, tags, onConflict, vector, staleAt } = this.resolveSetOptions(ttlOrOptions);
 
-    this.log("caching", key);
+    this.log("caching", parsedKey);
 
-    if (ttl === undefined) {
-      ttl = this.ttl;
+    // For conditional writes, check existence via get() so expired entries
+    // are treated as missing (get() handles expiry cleanup). The raw `cache.get`
+    // node lookup would let stale entries block onConflict: "create".
+    let existingNode = this.cache.get(parsedKey);
+    if (existingNode && existingNode.isExpired) {
+      this.removeNode(existingNode);
+      this.cache.delete(parsedKey);
+      existingNode = undefined;
     }
 
-    const existingNode = this.cache.get(key);
+    const exists = Boolean(existingNode);
+
+    if (onConflict === "create" && exists) {
+      const result: CacheSetResult = {
+        wasSet: false,
+        existing: existingNode!.value,
+      };
+      return result;
+    }
+
+    if (onConflict === "update" && !exists) {
+      const result: CacheSetResult = { wasSet: false, existing: null };
+      return result;
+    }
+
     if (existingNode) {
       existingNode.value = value;
-      // Update TTL
       if (ttl && ttl !== Infinity) {
         existingNode.expiresAt = Date.now() + ttl * 1000;
       } else {
         existingNode.expiresAt = undefined;
       }
+      existingNode.staleAt = staleAt;
+      if (vector) {
+        existingNode.vector = vector.slice();
+      }
 
       this.moveHead(existingNode);
     } else {
-      const newNode = new CacheNode(key, value, ttl);
+      const newNode = new CacheNode(parsedKey, value, ttl);
+      newNode.staleAt = staleAt;
+      if (vector) {
+        newNode.vector = vector.slice();
+      }
 
-      this.cache.set(key, newNode);
+      this.cache.set(parsedKey, newNode);
 
       this.addNode(newNode);
       if (this.cache.size > this.capacity) {
@@ -149,10 +238,18 @@ export class LRUMemoryCacheDriver
       }
     }
 
-    this.log("cached", key);
+    if (tags && tags.length > 0) {
+      await this.applyTags(parsedKey, tags);
+    }
 
-    // Emit set event
-    await this.emit("set", { key, value, ttl });
+    this.log("cached", parsedKey);
+
+    await this.emit("set", { key: parsedKey, value, ttl });
+
+    if (onConflict === "create" || onConflict === "update") {
+      const result: CacheSetResult = { wasSet: true, existing: null };
+      return result;
+    }
 
     return this;
   }
@@ -192,6 +289,27 @@ export class LRUMemoryCacheDriver
     this.removeNode(node);
 
     this.cache.delete(node.key);
+  }
+
+  /**
+   * Read the raw {@link CacheData} wrapper, including `staleAt` metadata.
+   * Returns `null` for missing or expired nodes — `swr()` consumes this
+   * to branch on freshness without going through `get()`'s clone-and-emit
+   * path.
+   */
+  protected async getEntry(key: CacheKey): Promise<CacheData | null> {
+    const parsedKey = this.parseKey(key);
+    const node = this.cache.get(parsedKey);
+
+    if (!node || node.isExpired) {
+      return null;
+    }
+
+    return {
+      data: node.value,
+      expiresAt: node.expiresAt,
+      staleAt: node.staleAt,
+    };
   }
 
   /**
@@ -275,18 +393,73 @@ export class LRUMemoryCacheDriver
 
   /**
    * {@inheritdoc}
+   *
+   * When a `globalPrefix` is configured, `flush` scopes itself to that prefix
+   * so multi-tenant caches don't accidentally wipe sibling tenants. Without
+   * a prefix, clears everything.
    */
   public async flush() {
     this.log("flushing");
 
-    this.cache.clear();
-
-    this.init();
+    if (this.options.globalPrefix) {
+      await this.removeNamespace("");
+    } else {
+      this.cache.clear();
+      this.init();
+    }
 
     this.log("flushed");
 
-    // Emit flushed event
     await this.emit("flushed");
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Brute-force O(N) cosine similarity over every cached node that carries a
+   * vector. Suitable for development and small in-memory knowledge bases —
+   * not for production beyond ~10k entries.
+   *
+   * @warning Dev-only — O(N) per query.
+   */
+  public async similar<T = any>(
+    vector: number[],
+    options: CacheSimilarOptions,
+  ): Promise<CacheSimilarHit<T>[]> {
+    const tagFilter = await this.getKeysForTags(options.tags);
+
+    const hits: CacheSimilarHit<T>[] = [];
+
+    for (const [parsedKey, node] of this.cache) {
+      if (!node.vector) continue;
+      if (node.isExpired) continue;
+      if (tagFilter && !tagFilter.has(parsedKey)) continue;
+
+      const score = cosineSimilarity(vector, node.vector);
+
+      if (options.threshold !== undefined && score < options.threshold) {
+        continue;
+      }
+
+      // Clone object values to match get() semantics.
+      let value: any = node.value;
+      if (value !== null && value !== undefined) {
+        const t = typeof value;
+        if (t !== "string" && t !== "number" && t !== "boolean") {
+          value = structuredClone(value);
+        }
+      }
+
+      hits.push({ key: parsedKey, value, score });
+    }
+
+    hits.sort((a, b) => b.score - a.score);
+
+    if (options.topK >= 0 && hits.length > options.topK) {
+      hits.length = options.topK;
+    }
+
+    return hits;
   }
 
   /**

@@ -83,6 +83,91 @@ async function main() {
 }
 ```
 
+### TTL — three accepted shapes (v2+)
+
+The 3rd argument of `set` accepts three shapes:
+
+```ts
+// 1. Number of seconds (back-compat)
+await cache.set("name", "John Doe", 600);
+
+// 2. Human-readable duration string (parsed via the `ms` package)
+await cache.set("name", "John Doe", "10m");
+await cache.set("session", token, "1h");
+await cache.set("report", report, "7d");
+
+// 3. Rich options object
+await cache.set("user:1", user, {
+  ttl: "1h",                     // or number of seconds — mutually exclusive with expiresAt
+  expiresAt: new Date("..."),    // absolute deadline (Date or epoch ms)
+  tags: ["users", "active"],     // inline tags
+  onConflict: "create",          // "create" | "update" | "upsert" (default)
+  driver: "redis",               // route this single call to a non-default driver
+});
+```
+
+Global driver config accepts shapes 1 and 2:
+
+```ts
+cache.setCacheConfigurations({
+  default: "redis",
+  drivers: { redis: RedisCacheDriver, memory: MemoryCacheDriver },
+  options: {
+    redis: { url: "...", ttl: "7d" },     // string OK
+    memory: { ttl: 3600 },                 // number OK
+  },
+});
+```
+
+### Conditional writes (`onConflict`)
+
+```ts
+// Create only if missing — Redis-native SET … NX; emulated on other drivers.
+const result = await cache.set("session:abc", session, { onConflict: "create", ttl: "1h" });
+// { wasSet: true, existing: null } when new
+// { wasSet: false, existing: <prior value> } when key already existed
+
+// Update only if present — Redis SET … XX; emulated elsewhere.
+await cache.set("user:1", patch, { onConflict: "update" });
+```
+
+Redis users who know the shorthand: `"create"` maps to `NX`, `"update"` maps to `XX`.
+
+### Atomic update and merge
+
+```ts
+// Read → transform → write under a per-key in-process lock.
+await cache.update<User>("user:1", (current) => {
+  if (!current) return null;                     // returning null removes the entry
+  return { ...current, lastSeen: Date.now() };
+});
+
+// Shallow-merge sugar.
+await cache.merge<User>("user:1", { name: "Jane" });
+```
+
+`update` and `merge` throw `CacheUnsupportedError` on the file driver until a file-lock primitive lands.
+
+### List sub-API
+
+For queues, recent-N buffers, and ordered collections:
+
+```ts
+const recent = cache.list<Event>("recent-events");
+
+await recent.push(event);
+await recent.unshift(priorityEvent);
+const tail = await recent.pop();
+const head = await recent.shift();
+const firstTen = await recent.slice(0, 10);
+const count = await recent.length();
+
+await recent.trim(0, 99);   // keep only indices 0–99
+await recent.clear();
+```
+
+Default implementation stores the list as a single cache entry and reads/writes the whole array per op. A Redis-native override using `LPUSH` / `LRANGE` / `LTRIM` is planned for v2.1.
+
 ### Storing objects and arrays
 
 By default, the cache manager out of the box handles primitive values along with objects and arrays, they are serialized into string if the driver allows only primitive values then deserialized when getting the value, if the driver allows setting objects and arrays, then they will be stored as is like in the memory driver.

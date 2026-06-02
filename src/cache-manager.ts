@@ -1,10 +1,24 @@
+import { CacheMetricsCollector } from "./metrics";
+import { ScopedCache } from "./scoped-cache";
 import type {
   CacheConfigurations,
   CacheDriver,
   CacheEventHandler,
   CacheEventType,
   CacheKey,
+  CacheListAccessor,
+  CacheMetricsSnapshot,
+  CacheNamespaceOptions,
+  CacheSetOptions,
+  CacheSimilarHit,
+  CacheSimilarOptions,
+  CacheSwrOptions,
+  CacheTtl,
   DriverClass,
+  LockOptions,
+  LockOutcome,
+  RememberOptions,
+  ScopedCacheContract,
   TaggedCacheDriver,
 } from "./types";
 import { CacheConfigurationError, CacheDriverNotInitializedError } from "./types";
@@ -32,6 +46,13 @@ export class CacheManager implements CacheDriver<any, any> {
    * Global event listeners
    */
   protected globalEventListeners: Map<CacheEventType, Set<CacheEventHandler>> = new Map();
+
+  /**
+   * Metrics collector — lazy on first {@link metrics} call so apps that
+   * never read metrics pay zero cost. Once instantiated, it stays
+   * subscribed to events for the manager's lifetime.
+   */
+  protected metricsCollector?: CacheMetricsCollector;
 
   /**
    * {@inheritdoc}
@@ -65,11 +86,29 @@ export class CacheManager implements CacheDriver<any, any> {
   }
 
   /**
-   * Use the given driver
+   * Switch the manager to a registered driver, optionally injecting runtime
+   * options that merge over the static config.
+   *
+   * The string form looks the driver up in `setCacheConfigurations({ drivers })`,
+   * loads it (or returns the cached instance), and sets it as `currentDriver`.
+   * The instance form takes a pre-built driver and bypasses the registry; the
+   * `runtimeOptions` argument is silently ignored in that case because the
+   * instance was constructed externally.
+   *
+   * Runtime options merge over `config.options[name]` per-key — runtime wins.
+   * Use this for constructor-only knobs that can't live in static config
+   * (e.g. `pg`'s `client: pg.Pool`).
+   *
+   * @example
+   * const pool = new Pool({ connectionString });
+   * await cache.use("pg", { client: pool });
    */
-  public async use(driver: string | CacheDriver<any, any>) {
+  public async use(
+    driver: string | CacheDriver<any, any>,
+    runtimeOptions?: Record<string, any>,
+  ) {
     if (typeof driver === "string") {
-      const driverInstance = await this.load(driver);
+      const driverInstance = await this.load(driver, runtimeOptions);
 
       if (!driverInstance) {
         throw new CacheConfigurationError(
@@ -80,7 +119,6 @@ export class CacheManager implements CacheDriver<any, any> {
       driver = driverInstance;
     }
 
-    // Attach global listeners to the new driver
     this.attachGlobalListeners(driver);
 
     if (this.configurations.logging !== undefined) {
@@ -88,6 +126,7 @@ export class CacheManager implements CacheDriver<any, any> {
     }
 
     this.currentDriver = driver;
+
     return this;
   }
 
@@ -101,23 +140,105 @@ export class CacheManager implements CacheDriver<any, any> {
   }
 
   /**
+   * Return the running metrics snapshot — counters, hit-rate, latency
+   * percentiles, per-driver breakdowns. Lazy-attaches the collector on
+   * first call so apps that never read metrics pay zero cost.
+   *
+   * @example
+   * const m = cache.metrics();
+   * console.log(`hit rate: ${(m.hitRate * 100).toFixed(1)}%`);
+   * console.log(`p95: ${m.latencyMs.p95.toFixed(2)}ms`);
+   */
+  public metrics(): CacheMetricsSnapshot {
+    return this.ensureMetricsCollector().snapshot();
+  }
+
+  /**
+   * Wipe every counter + latency sample and reset `startedAt` to now.
+   * The collector itself stays subscribed to events.
+   */
+  public resetMetrics(): void {
+    this.ensureMetricsCollector().reset();
+  }
+
+  /**
+   * Lazy-construct the metrics collector and wire it to the global event
+   * bus. Subsequent calls return the same instance — survives `cache.use()`
+   * driver switches because handlers attach via `on()` and re-bind to every
+   * loaded driver.
+   */
+  protected ensureMetricsCollector(): CacheMetricsCollector {
+    if (this.metricsCollector) {
+      return this.metricsCollector;
+    }
+
+    const collector = new CacheMetricsCollector();
+
+    this.on("hit", (data) => collector.recordEvent("hit", data));
+    this.on("miss", (data) => collector.recordEvent("miss", data));
+    this.on("set", (data) => collector.recordEvent("set", data));
+    this.on("removed", (data) => collector.recordEvent("removed", data));
+    this.on("error", (data) => collector.recordEvent("error", data));
+
+    this.metricsCollector = collector;
+
+    return collector;
+  }
+
+  /**
+   * Time the body, record the elapsed milliseconds against the metrics
+   * collector for the given driver (defaults to the current driver's name).
+   * Pass-through if the collector hasn't been instantiated yet — apps that
+   * don't read metrics never pay for sample collection.
+   */
+  protected async timed<T>(
+    body: () => Promise<T>,
+    driverName?: string,
+  ): Promise<T> {
+    if (!this.metricsCollector) {
+      return body();
+    }
+
+    const start = performance.now();
+
+    try {
+      return await body();
+    } finally {
+      const elapsed = performance.now() - start;
+      const name = driverName ?? this.currentDriver?.name ?? "unknown";
+      this.metricsCollector.recordLatency(name, elapsed);
+    }
+  }
+
+  /**
    * {@inheritdoc}
    */
   public async get<T = any>(key: CacheKey): Promise<T | null> {
     this.ensureDriverInitialized();
-    return this.currentDriver!.get(key);
+    return this.timed(() => this.currentDriver!.get<T>(key));
   }
 
   /**
-   * Set a value in the cache
+   * Set a value in the cache.
    *
-   * @param key The cache key, could be an object or string
-   * @param value The value to be stored in the cache
-   * @param ttl The time to live in seconds
+   * Accepts a positional TTL (number of seconds or duration string like `"1h"`)
+   * or a rich {@link CacheSetOptions} object supporting `ttl`, `expiresAt`,
+   * `tags`, `onConflict`, `namespace`, and per-call `driver` overrides.
    */
-  public async set(key: CacheKey, value: any, ttl?: number) {
+  public async set(key: CacheKey, value: any, ttlOrOptions?: CacheTtl | CacheSetOptions) {
     this.ensureDriverInitialized();
-    return this.currentDriver!.set(key, value, ttl);
+
+    const driverOverride =
+      ttlOrOptions && typeof ttlOrOptions === "object" && "driver" in ttlOrOptions
+        ? ttlOrOptions.driver
+        : undefined;
+
+    if (driverOverride) {
+      const driver = await this.load(driverOverride);
+      return this.timed(() => driver.set(key, value, ttlOrOptions), driver.name);
+    }
+
+    return this.timed(() => this.currentDriver!.set(key, value, ttlOrOptions));
   }
 
   /**
@@ -125,7 +246,7 @@ export class CacheManager implements CacheDriver<any, any> {
    */
   public async remove(key: CacheKey) {
     this.ensureDriverInitialized();
-    return this.currentDriver!.remove(key);
+    return this.timed(() => this.currentDriver!.remove(key));
   }
 
   /**
@@ -177,10 +298,19 @@ export class CacheManager implements CacheDriver<any, any> {
   }
 
   /**
-   * Get an instance of the cache driver
+   * Return the loaded driver instance for `driverName`, loading it on first
+   * call. Optional `runtimeOptions` follow the same merge-over-config rules
+   * as {@link load}; passing options after the driver has already been
+   * loaded throws to avoid silent swallowing.
    */
-  public async driver(driverName: string) {
-    return this.loadedDrivers[driverName] || (await this.load(driverName));
+  public async driver(driverName: string, runtimeOptions?: Record<string, any>) {
+    if (this.loadedDrivers[driverName]) {
+      this.assertNoConflictingReload(driverName, runtimeOptions);
+
+      return this.loadedDrivers[driverName];
+    }
+
+    return this.load(driverName, runtimeOptions);
   }
 
   /**
@@ -199,10 +329,25 @@ export class CacheManager implements CacheDriver<any, any> {
   }
 
   /**
-   * Load the given cache driver name
+   * Load and connect the registered driver named `driver`. First-call wins —
+   * subsequent calls without `runtimeOptions` return the cached instance, and
+   * subsequent calls *with* `runtimeOptions` throw {@link CacheConfigurationError}
+   * to avoid silently dropping the new options.
+   *
+   * `runtimeOptions` merge over `config.options[driver]` per-key (runtime wins),
+   * letting consumers split static knobs (table, ttl, globalPrefix) from
+   * constructor-only ones (pg's `client`, custom adapters, etc.).
+   *
+   * @example
+   * const pool = new Pool({ connectionString });
+   * const pg = await cache.load("pg", { client: pool });
    */
-  public async load(driver: string) {
-    if (this.loadedDrivers[driver]) return this.loadedDrivers[driver];
+  public async load(driver: string, runtimeOptions?: Record<string, any>) {
+    if (this.loadedDrivers[driver]) {
+      this.assertNoConflictingReload(driver, runtimeOptions);
+
+      return this.loadedDrivers[driver];
+    }
 
     const Driver = this.configurations.drivers[
       driver as keyof typeof this.configurations.drivers
@@ -215,19 +360,42 @@ export class CacheManager implements CacheDriver<any, any> {
     }
 
     const driverInstance = new Driver();
+    const configOptions =
+      this.configurations.options[driver as keyof typeof this.configurations.options] || {};
 
-    driverInstance.setOptions(
-      this.configurations.options[driver as keyof typeof this.configurations.options] || {},
-    );
+    driverInstance.setOptions({ ...configOptions, ...(runtimeOptions ?? {}) });
 
     await driverInstance.connect();
 
-    // Attach global listeners to newly loaded driver
     this.attachGlobalListeners(driverInstance);
 
     this.loadedDrivers[driver] = driverInstance;
 
     return driverInstance as CacheDriver<any, any>;
+  }
+
+  /**
+   * Guard against silently dropping runtime options on a re-load. Once a
+   * driver has been instantiated, its options are frozen — calling `load` /
+   * `driver` / `use` again with a non-empty `runtimeOptions` would otherwise
+   * appear to work but actually use the original options. We throw instead
+   * so the misuse surfaces at the call site.
+   */
+  protected assertNoConflictingReload(
+    driverName: string,
+    runtimeOptions: Record<string, any> | undefined,
+  ): void {
+    if (runtimeOptions === undefined) {
+      return;
+    }
+
+    if (Object.keys(runtimeOptions).length === 0) {
+      return;
+    }
+
+    throw new CacheConfigurationError(
+      `Cache driver '${driverName}' is already loaded; runtime options on subsequent calls are ignored — register a second driver name if you need a different configuration.`,
+    );
   }
 
   /**
@@ -257,9 +425,55 @@ export class CacheManager implements CacheDriver<any, any> {
   /**
    * {@inheritdoc}
    */
-  public async remember(key: CacheKey, ttl: number, callback: () => Promise<any>): Promise<any> {
+  public async remember<T = any>(
+    key: CacheKey,
+    ttlOrOptions: CacheTtl | RememberOptions,
+    callback: () => Promise<T>,
+  ): Promise<T> {
     this.ensureDriverInitialized();
-    return this.currentDriver!.remember(key, ttl, callback);
+
+    const driverOverride =
+      ttlOrOptions && typeof ttlOrOptions === "object" && "driver" in ttlOrOptions
+        ? ttlOrOptions.driver
+        : undefined;
+
+    if (driverOverride) {
+      const driver = await this.load(driverOverride);
+      return driver.remember(key, ttlOrOptions, callback);
+    }
+
+    return this.currentDriver!.remember(key, ttlOrOptions, callback);
+  }
+
+  /**
+   * Stale-while-revalidate. Returns cached when fresh, returns the stale
+   * value plus a background refresh when within `freshTtl..staleTtl`,
+   * blocks like a normal miss past `staleTtl`. Honors per-call `driver`
+   * override the same way `remember()` does.
+   *
+   * @example
+   * const product = await cache.swr(
+   *   "product.42",
+   *   { freshTtl: "1m", staleTtl: "1h" },
+   *   () => db.products.find(42),
+   * );
+   */
+  public async swr<T = any>(
+    key: CacheKey,
+    options: CacheSwrOptions,
+    callback: () => Promise<T>,
+  ): Promise<T> {
+    this.ensureDriverInitialized();
+
+    const driverOverride = options.driver;
+
+    if (driverOverride) {
+      const driver = await this.load(driverOverride);
+
+      return driver.swr<T>(key, options, callback);
+    }
+
+    return this.currentDriver!.swr<T>(key, options, callback);
   }
 
   /**
@@ -399,6 +613,110 @@ export class CacheManager implements CacheDriver<any, any> {
   public tags(tags: string[]): TaggedCacheDriver {
     this.ensureDriverInitialized();
     return this.currentDriver!.tags(tags);
+  }
+
+  /**
+   * Atomically read, transform, and write a cached value. Delegates to the current driver.
+   */
+  public async update<T = any>(
+    key: CacheKey,
+    fn: (current: T | null) => T | null | Promise<T | null>,
+    options?: { ttl?: CacheTtl },
+  ): Promise<T | null> {
+    this.ensureDriverInitialized();
+    return this.currentDriver!.update<T>(key, fn, options);
+  }
+
+  /**
+   * Shallow-merge a partial object into a cached value.
+   */
+  public async merge<T extends Record<string, any> = Record<string, any>>(
+    key: CacheKey,
+    partial: Partial<T>,
+    options?: { ttl?: CacheTtl },
+  ): Promise<T> {
+    this.ensureDriverInitialized();
+    return this.currentDriver!.merge<T>(key, partial, options);
+  }
+
+  /**
+   * Obtain a list accessor bound to the current driver.
+   */
+  public list<T = any>(key: CacheKey): CacheListAccessor<T> {
+    this.ensureDriverInitialized();
+    return this.currentDriver!.list<T>(key);
+  }
+
+  /**
+   * Acquire a distributed lock, run `fn`, and auto-release. Returns a
+   * {@link LockOutcome} discriminated union so callers can distinguish
+   * "ran and got this value" from "skipped because someone else holds it".
+   *
+   * Honors the `driver` option for per-call driver override, same as `set`
+   * and `remember`.
+   *
+   * @example
+   * const outcome = await cache.lock("lock.import", "5m", async () => {
+   *   await runImport();
+   *   return "done";
+   * });
+   * if (!outcome.acquired) {
+   *   console.log("another worker is already importing");
+   * }
+   */
+  public async lock<T>(
+    key: CacheKey,
+    ttlOrOptions: CacheTtl | LockOptions,
+    fn: () => Promise<T>,
+  ): Promise<LockOutcome<T>> {
+    this.ensureDriverInitialized();
+
+    const driverOverride =
+      ttlOrOptions && typeof ttlOrOptions === "object" && "driver" in ttlOrOptions
+        ? ttlOrOptions.driver
+        : undefined;
+
+    const driver = driverOverride
+      ? await this.load(driverOverride)
+      : this.currentDriver!;
+
+    return driver.lock<T>(key, ttlOrOptions as CacheTtl | Omit<LockOptions, "driver">, fn);
+  }
+
+  /**
+   * Similarity retrieval. Delegates to the current driver's `similar()` impl.
+   *
+   * Drivers that lack a similarity index throw {@link CacheUnsupportedError}.
+   *
+   * @example
+   * const hits = await cache.similar(await embed(query), { topK: 5, threshold: 0.7 });
+   */
+  /**
+   * Create a scoped view over the cache. Every key written through the
+   * returned scope is automatically prefixed with `prefix`; optional defaults
+   * (`ttl`, `tags`) flow through every write inside the scope.
+   *
+   * Per-call options always win over scope defaults. Scope tags merge
+   * additively with per-call tags. Nested scopes inherit from the parent.
+   *
+   * @example
+   * const chat = cache.namespace("chats.10", { ttl: "30d" });
+   * await chat.set("messages.1", msg);          // → "chats.10.messages.1", 30d
+   * await chat.set("draft", d, { ttl: "1h" });  // per-call ttl wins
+   * await chat.namespace("typing", { ttl: "5s" }).set("user.42", true);
+   * await chat.clear();                          // wipe the whole scope
+   */
+  public namespace(prefix: string, options?: CacheNamespaceOptions): ScopedCacheContract {
+    this.ensureDriverInitialized();
+    return new ScopedCache(this, prefix, options);
+  }
+
+  public async similar<T = any>(
+    vector: number[],
+    options: CacheSimilarOptions,
+  ): Promise<CacheSimilarHit<T>[]> {
+    this.ensureDriverInitialized();
+    return this.currentDriver!.similar<T>(vector, options);
   }
 }
 
