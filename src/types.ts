@@ -371,6 +371,7 @@ export type CacheOperationType =
   | "notFound"
   | "connecting"
   | "error"
+  | "connectionFailed"
   | "connected"
   | "disconnecting"
   | "disconnected";

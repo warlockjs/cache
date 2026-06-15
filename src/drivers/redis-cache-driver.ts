@@ -340,21 +340,31 @@ export class RedisCacheDriver
       ...(this.options.clientOptions || {}),
     };
 
-    this.log("connecting");
-    const { createClient } = RedisClient;
-
-    this.client = createClient(clientOptions);
-
-    this.client.on("error", (error: Error) => {
-      this.log("error", error.message);
-    });
     try {
+      this.log("connecting");
+      const { createClient } = RedisClient;
+
+      this.client = createClient(clientOptions);
+
+      this.client.on("error", (error: Error) => {
+        if ((error as any).code === "ECONNREFUSED") {
+          this.log("connectionFailed", error);
+        } else {
+          this.log("error", error.message);
+        }
+      });
+
       await this.client.connect();
 
       this.log("connected");
       await this.emit("connected");
     } catch (error) {
-      log.error("cache", "redis", error);
+      console.log("Err", error);
+
+      // Boot-time cache connection failure is unrecoverable in practice —
+      // `fatal` aligns Redis with the cascade drivers and herald connector
+      // for clean "page on fatal only" alerting.
+      log.fatal("cache", "redis", error);
       await this.emit("error", { error });
     }
   }

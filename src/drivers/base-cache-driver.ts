@@ -22,7 +22,12 @@ import type {
   RememberOptions,
 } from "../types";
 import { CacheUnsupportedError } from "../types";
-import { normalizeToOptions, parseCacheKey, parseTtl, resolveTtl } from "../utils";
+import {
+  normalizeToOptions,
+  parseCacheKey,
+  parseTtl,
+  resolveTtl,
+} from "../utils";
 
 /**
  * Normalized form of the 3rd `set` argument.
@@ -80,6 +85,7 @@ const messages = {
   connected: "Connected to the cache engine.",
   disconnecting: "Disconnecting from the cache engine.",
   disconnected: "Disconnected from the cache engine.",
+  connectionFailed: "Failed to connect to the cache engine.",
   error: "Error occurred",
 };
 
@@ -133,7 +139,8 @@ export abstract class BaseCacheDriver<
   /**
    * Event listeners storage
    */
-  protected eventListeners: Map<CacheEventType, Set<CacheEventHandler>> = new Map();
+  protected eventListeners: Map<CacheEventType, Set<CacheEventHandler>> =
+    new Map();
 
   /**
    * {@inheritdoc}
@@ -186,7 +193,10 @@ export abstract class BaseCacheDriver<
   /**
    * Emit an event to all registered listeners
    */
-  protected async emit(event: CacheEventType, data: Partial<CacheEventData> = {}): Promise<void> {
+  protected async emit(
+    event: CacheEventType,
+    data: Partial<CacheEventData> = {},
+  ): Promise<void> {
     const handlers = this.eventListeners.get(event);
     if (!handlers || handlers.size === 0) return;
 
@@ -256,7 +266,9 @@ export abstract class BaseCacheDriver<
    *
    * Returns `null` when no tags are passed (callers should treat that as "no filter").
    */
-  protected async getKeysForTags(tags: string[] | undefined): Promise<Set<string> | null> {
+  protected async getKeysForTags(
+    tags: string[] | undefined,
+  ): Promise<Set<string> | null> {
     if (!tags || tags.length === 0) {
       return null;
     }
@@ -406,7 +418,13 @@ export abstract class BaseCacheDriver<
     const isExpired = entry?.expiresAt !== undefined && entry.expiresAt <= now;
 
     if (!entry || isExpired) {
-      return this.swrFetchAndStore<T>(key, options, callback, freshSeconds, staleSeconds);
+      return this.swrFetchAndStore<T>(
+        key,
+        options,
+        callback,
+        freshSeconds,
+        staleSeconds,
+      );
     }
 
     const isFresh = entry.staleAt === undefined || entry.staleAt > now;
@@ -415,7 +433,14 @@ export abstract class BaseCacheDriver<
       return entry.data as T;
     }
 
-    this.scheduleSwrRefresh<T>(parsedKey, key, options, callback, freshSeconds, staleSeconds);
+    this.scheduleSwrRefresh<T>(
+      parsedKey,
+      key,
+      options,
+      callback,
+      freshSeconds,
+      staleSeconds,
+    );
 
     return entry.data as T;
   }
@@ -558,7 +583,9 @@ export abstract class BaseCacheDriver<
     const current = (await this.get(key)) || 0;
 
     if (typeof current !== "number") {
-      throw new Error(`Cannot increment non-numeric value for key: ${this.parseKey(key)}`);
+      throw new Error(
+        `Cannot increment non-numeric value for key: ${this.parseKey(key)}`,
+      );
     }
 
     const newValue = current + value;
@@ -583,20 +610,29 @@ export abstract class BaseCacheDriver<
   /**
    * {@inheritdoc}
    */
-  public async setMany(items: Record<string, any>, ttl?: number): Promise<void> {
-    await Promise.all(Object.entries(items).map(([key, value]) => this.set(key, value, ttl)));
+  public async setMany(
+    items: Record<string, any>,
+    ttl?: number,
+  ): Promise<void> {
+    await Promise.all(
+      Object.entries(items).map(([key, value]) => this.set(key, value, ttl)),
+    );
   }
 
   /**
    * Log the operation
    */
-  protected log(operation: CacheOperationType, key?: string) {
+  protected log(operation: CacheOperationType, key?: string | any) {
     if (!this.shouldLog) return;
 
-    if (key) {
+    if (typeof key === "string") {
       // this will be likely used with file cache driver as it will convert the dot to slash
       // to make it consistent and not to confuse developers we will output the key by making sure it's a dot
-      key = key.replaceAll("/", ".");
+      key = key.replace(/\//g, ".");
+    }
+
+    if (operation === "connectionFailed") {
+      log.fatal(`cache.${this.name}`, operation, key);
     }
 
     if (operation == "notFound" || operation == "expired") {
@@ -615,7 +651,11 @@ export abstract class BaseCacheDriver<
       );
     }
 
-    log.info("cache." + this.name, operation, (key ? key + " " : "") + messages[operation]);
+    log.info(
+      "cache." + this.name,
+      operation,
+      (key ? key + " " : "") + messages[operation],
+    );
   }
 
   /**
@@ -751,33 +791,35 @@ export abstract class BaseCacheDriver<
     // earlier lock resolves.
     const previous = this.locks.get(parsedKey) ?? Promise.resolve();
 
-    const next = previous.catch(() => undefined).then(async () => {
-      const current = (await this.get(key)) as T | null;
-      const result = await fn(current);
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const current = (await this.get(key)) as T | null;
+        const result = await fn(current);
 
-      if (result === null) {
-        await this.remove(key);
-        return null;
-      }
+        if (result === null) {
+          await this.remove(key);
+          return null;
+        }
 
-      if (options.ttl !== undefined) {
-        await this.set(key, result, { ttl: options.ttl });
+        if (options.ttl !== undefined) {
+          await this.set(key, result, { ttl: options.ttl });
+
+          return result;
+        }
+
+        // No explicit TTL → preserve the existing entry's remaining lifetime
+        // rather than resetting it to the driver default.
+        const remainingTtl = await this.getRemainingTtl(key);
+
+        if (remainingTtl !== undefined) {
+          await this.set(key, result, { ttl: remainingTtl });
+        } else {
+          await this.set(key, result);
+        }
 
         return result;
-      }
-
-      // No explicit TTL → preserve the existing entry's remaining lifetime
-      // rather than resetting it to the driver default.
-      const remainingTtl = await this.getRemainingTtl(key);
-
-      if (remainingTtl !== undefined) {
-        await this.set(key, result, { ttl: remainingTtl });
-      } else {
-        await this.set(key, result);
-      }
-
-      return result;
-    });
+      });
 
     this.locks.set(parsedKey, next);
 
@@ -849,7 +891,9 @@ export abstract class BaseCacheDriver<
     // (e.g. the null driver) may return anything else — treat that as
     // "acquired" since there's nothing to collide with.
     const wasSet =
-      typeof setResult === "object" && setResult !== null && "wasSet" in setResult
+      typeof setResult === "object" &&
+      setResult !== null &&
+      "wasSet" in setResult
         ? (setResult as CacheSetResult).wasSet
         : true;
 
@@ -886,7 +930,10 @@ export abstract class BaseCacheDriver<
    */
   protected normalizeLockOptions(
     ttlOrOptions: CacheTtl | Omit<LockOptions, "driver">,
-  ): { ttl: CacheTtl; owner?: string } {
+  ): {
+    ttl: CacheTtl;
+    owner?: string;
+  } {
     if (typeof ttlOrOptions === "number" || typeof ttlOrOptions === "string") {
       return { ttl: ttlOrOptions };
     }
