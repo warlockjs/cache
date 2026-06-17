@@ -1,6 +1,6 @@
 {
   "name": "@warlock.js/cache",
-  "version": "4.2.9",
+  "version": "4.2.10",
   "type": "module",
   "description": "A Robust Cache Manager for Nodejs",
   "main": "./cjs/index.js",
