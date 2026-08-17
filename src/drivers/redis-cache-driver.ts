@@ -86,7 +86,11 @@ export class RedisCacheDriver
 
     this.log("clearing", namespace);
 
-    const keys = await this.client?.keys(`${namespace}*`);
+    // Escape Redis glob metacharacters so a namespace carrying `*`/`?`/`[`
+    // cannot widen the match and delete keys outside its own prefix.
+    const pattern = namespace.replace(/[\\*?[\]]/g, "\\$&");
+
+    const keys = await this.client?.keys(`${pattern}*`);
 
     if (!keys || keys.length === 0) {
       this.log("notFound", namespace);

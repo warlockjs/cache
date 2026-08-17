@@ -14,7 +14,7 @@ import type {
   CacheTtl,
   FileCacheOptions,
 } from "../types";
-import { CacheConfigurationError, CacheUnsupportedError } from "../types";
+import { CacheConfigurationError, CacheError, CacheUnsupportedError } from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
 
 export class FileCacheDriver
@@ -68,13 +68,55 @@ export class FileCacheDriver
   }
 
   /**
+   * Map a parsed cache key (or namespace) to its on-disk directory.
+   *
+   * The key must become exactly one directory component: `%` and the path
+   * separators are percent-encoded so a hostile key (`../../etc`,
+   * `..\\..\\evil`) turns into an inert directory name instead of a path
+   * traversal, while distinct keys can never collide after encoding. Dots are
+   * left untouched — the `.`-delimited namespace scheme is purely logical and
+   * only ever produces a single filesystem component here.
+   */
+  protected keyDirectory(parsedKey: string): string {
+    const encoded = parsedKey
+      .replace(/%/g, "%25")
+      .replace(/\//g, "%2F")
+      .replace(/\\/g, "%5C");
+
+    return this.containedPath(encoded);
+  }
+
+  /**
+   * Resolve `segment` against the cache root and throw when the result lands
+   * outside it — the last line of defense against path traversal, independent
+   * of how the key was encoded.
+   */
+  protected containedPath(segment: string): string {
+    const base = path.resolve(this.directory);
+    const resolved = path.resolve(base, segment);
+    const relative = path.relative(base, resolved);
+
+    if (
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
+      throw new CacheError(
+        `Cache key resolves outside the cache directory: "${segment}"`,
+      );
+    }
+
+    return resolved;
+  }
+
+  /**
    * {@inheritdoc}
    */
   public async removeNamespace(namespace: string) {
     this.log("clearing", namespace);
 
     try {
-      await removeDirectoryAsync(path.resolve(this.directory, namespace));
+      await removeDirectoryAsync(this.keyDirectory(namespace));
 
       this.log("cleared", namespace);
     } catch (error) {
@@ -118,7 +160,7 @@ export class FileCacheDriver
 
     const data = this.prepareDataForStorage(value, ttl, staleAt);
 
-    const fileDirectory = path.resolve(this.directory, parsedKey);
+    const fileDirectory = this.keyDirectory(parsedKey);
 
     await ensureDirectoryAsync(fileDirectory);
 
@@ -170,7 +212,7 @@ export class FileCacheDriver
    */
   protected async getEntry(key: CacheKey): Promise<CacheData | null> {
     const parsedKey = this.parseKey(key);
-    const fileDirectory = path.resolve(this.directory, parsedKey);
+    const fileDirectory = this.keyDirectory(parsedKey);
 
     try {
       const entry = (await getJsonFileAsync(path.resolve(fileDirectory, this.fileName))) as
@@ -199,7 +241,7 @@ export class FileCacheDriver
 
     this.log("fetching", parsedKey);
 
-    const fileDirectory = path.resolve(this.directory, parsedKey);
+    const fileDirectory = this.keyDirectory(parsedKey);
 
     try {
       const value = await getJsonFileAsync(path.resolve(fileDirectory, this.fileName));
@@ -235,7 +277,7 @@ export class FileCacheDriver
     const parsedKey = this.parseKey(key);
     this.log("removing", parsedKey);
 
-    const fileDirectory = path.resolve(this.directory, parsedKey);
+    const fileDirectory = this.keyDirectory(parsedKey);
 
     try {
       await removeDirectoryAsync(fileDirectory);

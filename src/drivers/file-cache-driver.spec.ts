@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CacheDriver } from "../types";
-import { CacheConfigurationError } from "../types";
+import { CacheConfigurationError, CacheError } from "../types";
 import { FileCacheDriver } from "./file-cache-driver";
 
 describe("FileCacheDriver", () => {
@@ -170,6 +170,98 @@ describe("FileCacheDriver", () => {
       await driver.set("post.1", { id: 1 }, { tags: ["posts"] });
       const tagged = (await driver.get("cache.tags.posts")) as string[];
       expect(tagged).toContain("post.1");
+    });
+  });
+
+  describe("path traversal containment", () => {
+    it("set with a ../-bearing key never writes outside the cache directory", async () => {
+      await driver.set("../../escape-target", { pwned: true });
+
+      // The raw key would have resolved two levels above the cache root.
+      expect(existsSync(resolve(directory, "../../escape-target"))).toBe(false);
+      expect(existsSync(resolve(directory, "../escape-target"))).toBe(false);
+
+      // The entry is still a working cache entry, just contained.
+      await expect(driver.get("../../escape-target")).resolves.toEqual({ pwned: true });
+    });
+
+    it("set with a backslash traversal key never writes outside the cache directory", async () => {
+      await driver.set("..\\..\\escape-target-win", "v");
+
+      expect(existsSync(resolve(directory, "..", "..", "escape-target-win"))).toBe(false);
+      expect(existsSync(resolve(directory, "..", "escape-target-win"))).toBe(false);
+      await expect(driver.get("..\\..\\escape-target-win")).resolves.toBe("v");
+    });
+
+    it("get with a ../-bearing key cannot read files outside the cache directory", async () => {
+      const outsideName = `warlock-secret-${Date.now()}`;
+      const outsideDir = join(directory, "..", outsideName);
+      mkdirSync(outsideDir, { recursive: true });
+      writeFileSync(join(outsideDir, "cache.json"), JSON.stringify({ data: "top-secret" }));
+
+      try {
+        await expect(driver.get(`../${outsideName}`)).resolves.toBeNull();
+        // The miss-cleanup inside get() must not have deleted the outside file.
+        expect(existsSync(join(outsideDir, "cache.json"))).toBe(true);
+      } finally {
+        rmSync(outsideDir, { recursive: true, force: true });
+      }
+    });
+
+    it("remove with a ../-bearing key cannot delete directories outside the cache directory", async () => {
+      const victimName = `warlock-victim-${Date.now()}`;
+      const victimDir = join(directory, "..", victimName);
+      mkdirSync(victimDir, { recursive: true });
+      writeFileSync(join(victimDir, "keep.txt"), "important");
+
+      try {
+        await driver.remove(`../${victimName}`);
+        expect(existsSync(join(victimDir, "keep.txt"))).toBe(true);
+      } finally {
+        rmSync(victimDir, { recursive: true, force: true });
+      }
+    });
+
+    it("removeNamespace with a ../-bearing namespace cannot delete outside directories", async () => {
+      const victimName = `warlock-ns-victim-${Date.now()}`;
+      const victimDir = join(directory, "..", victimName);
+      mkdirSync(victimDir, { recursive: true });
+
+      try {
+        await driver.removeNamespace(`../${victimName}`);
+        expect(existsSync(victimDir)).toBe(true);
+      } finally {
+        rmSync(victimDir, { recursive: true, force: true });
+      }
+    });
+
+    it("keys containing separators or % stay distinct after encoding", async () => {
+      await driver.set("a/b", 1);
+      await driver.set("a%2Fb", 2);
+      await driver.set("50%off", 3);
+
+      await expect(driver.get("a/b")).resolves.toBe(1);
+      await expect(driver.get("a%2Fb")).resolves.toBe(2);
+      await expect(driver.get("50%off")).resolves.toBe(3);
+    });
+
+    it("the containment guard throws CacheError for escaping segments", () => {
+      class ExposedFileCacheDriver extends FileCacheDriver {
+        public containedPathFor(segment: string) {
+          return this.containedPath(segment);
+        }
+      }
+
+      const exposed = new ExposedFileCacheDriver();
+      exposed.setOptions({ directory: () => directory });
+
+      expect(() => exposed.containedPathFor("../outside")).toThrow(CacheError);
+      expect(() => exposed.containedPathFor("..")).toThrow(CacheError);
+      expect(() => exposed.containedPathFor(resolve(directory, "..", "abs"))).toThrow(CacheError);
+
+      // Contained names — including ones merely starting with dots — pass.
+      expect(exposed.containedPathFor("user.profile")).toBe(resolve(directory, "user.profile"));
+      expect(exposed.containedPathFor("..oddname")).toBe(resolve(directory, "..oddname"));
     });
   });
 

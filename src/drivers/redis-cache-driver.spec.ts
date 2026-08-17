@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheConfigurationError } from "../types";
 
 type Handler = (...args: unknown[]) => void;
@@ -131,6 +131,13 @@ async function importDriver() {
 }
 
 describe("RedisCacheDriver", () => {
+  // Pay the one-time mocked-import warm-up here with a generous timeout so it
+  // can't blow the per-test budget of whichever test happens to run first on a
+  // cold transform cache.
+  beforeAll(async () => {
+    await importDriver();
+  }, 60000);
+
   beforeEach(async () => {
     await fakeClient.flushAll();
     fakeClient.quitCalls = 0;
@@ -312,6 +319,23 @@ describe("RedisCacheDriver", () => {
     await driver.connect();
 
     await expect(driver.removeNamespace("empty")).resolves.toBeUndefined();
+  });
+
+  it("removeNamespace escapes glob metacharacters so a namespace cannot widen the match", async () => {
+    const RedisCacheDriver = await importDriver();
+    const driver = new RedisCacheDriver();
+    driver.setLoggingState(false);
+    driver.setOptions({ url: "redis://localhost" });
+    await driver.connect();
+
+    await driver.set("tenant.other", "x");
+
+    const keysSpy = vi.spyOn(fakeClient, "keys");
+
+    await driver.removeNamespace("tenant*evil?");
+
+    expect(keysSpy).toHaveBeenCalledWith("tenant\\*evil\\?*");
+    await expect(driver.get("tenant.other")).resolves.toBe("x");
   });
 
   it("increment and decrement use native INCRBY/DECRBY", async () => {
