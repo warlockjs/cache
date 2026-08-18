@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Redis `removeNamespace` now escapes glob metacharacters (`*`, `?`, `[`, `\`) before building its `KEYS` pattern, so a namespace carrying untrusted input can no longer widen the match and delete keys outside its own prefix.
 - Removed the raw `console.log(value)` dump of the full cached payload when `structuredClone` fails in `parseCachedData` — cached values (potentially PII/tokens) no longer leak to stdout; the structured error log with the value's type is kept.
 
+### Dependencies
+
+- Bumped `@mongez/reinforcements` to `^4.0.1`. The major makes `Random.string/nanoid/id/token/uuid` CSPRNG-backed (WebCrypto) and removes `Random.seed()` support; audited this package's source and tests for `Random.seed(` and for seeded/reproducible use of `Random.*`, no hits, so no code changes were needed.
+
 ## 4.2.11
 
 ### Changed

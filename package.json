@@ -6,7 +6,7 @@
   "main": "./cjs/index.js",
   "dependencies": {
     "@warlock.js/fs": "*",
-    "@mongez/reinforcements": "^3.3.0",
+    "@mongez/reinforcements": "^4.0.1",
     "@warlock.js/logger": "*",
     "ms": "^2.1.3"
   },
