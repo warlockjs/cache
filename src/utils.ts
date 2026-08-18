@@ -275,6 +275,44 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
+/**
+ * Matches userinfo credentials embedded in a connection URL
+ * (e.g. `redis://user:pass@host`). Node/Redis/Postgres client errors
+ * frequently echo the target connection string — including the password —
+ * back in `error.message` on connection failure.
+ */
+const CREDENTIALS_IN_URL = /(:\/\/)[^\s/@]+:[^\s/@]+@/g;
+
+/**
+ * Strip embedded `user:pass@` credentials from a string before it reaches
+ * any log sink.
+ */
+export function redactCredentials(message: string): string {
+  return message.replace(CREDENTIALS_IN_URL, "$1[REDACTED]@");
+}
+
+/**
+ * Reduce an unknown thrown value to a log-safe `{ message, code? }` shape.
+ * Callers must never log the raw error object itself — it may carry the
+ * connection URL (with password) in the top-level message, `cause`, or
+ * driver-specific fields, all of which `console.log`/`util.inspect` would
+ * still print in full.
+ */
+export function safeErrorInfo(error: unknown): { message: string; code?: string } {
+  if (error instanceof Error) {
+    const info: { message: string; code?: string } = {
+      message: redactCredentials(error.message),
+    };
+
+    const code = (error as any).code;
+    if (code) info.code = String(code);
+
+    return info;
+  }
+
+  return { message: redactCredentials(String(error)) };
+}
+
 export enum CACHE_FOR {
   /**
    * Cache for 30 Minutes (in seconds)

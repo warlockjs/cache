@@ -74,6 +74,25 @@ class FakeRedisClient {
     return [...this.store.keys()].filter((k) => regex.test(k));
   }
 
+  // Mimics node-redis's `scanIterator`, yielding matching keys across
+  // multiple simulated batches instead of returning them all at once —
+  // exercises the driver's cursor-consuming loop the way a real SCAN would.
+  public async *scanIterator(options?: {
+    MATCH?: string;
+    COUNT?: number;
+  }): AsyncGenerator<string> {
+    const pattern = options?.MATCH ?? "*";
+    const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$");
+    const matches = [...this.store.keys()].filter((k) => regex.test(k));
+    const batchSize = options?.COUNT ?? 10;
+
+    for (let i = 0; i < matches.length; i += batchSize) {
+      for (const key of matches.slice(i, i + batchSize)) {
+        yield key;
+      }
+    }
+  }
+
   public async flushAll(): Promise<void> {
     this.store.clear();
     this.expires.clear();
@@ -162,6 +181,34 @@ describe("RedisCacheDriver", () => {
 
     expect(driver.client).toBe(fakeClient);
     expect(driver.options.url).toBe("redis://localhost:6379");
+  });
+
+  it("connect() failure never console.logs the raw error or leaks the password", async () => {
+    const { log } = await import("@warlock.js/logger");
+    const RedisCacheDriver = await importDriver();
+    const driver = new RedisCacheDriver();
+    driver.setLoggingState(false);
+    driver.setOptions({ host: "h", port: 6379, username: "u", password: "s3cr3t" });
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const fatalSpy = vi.spyOn(log, "fatal").mockImplementation(() => log as any);
+    const connectSpy = vi
+      .spyOn(fakeClient, "connect")
+      .mockRejectedValueOnce(new Error("connect ECONNREFUSED redis://u:s3cr3t@h:6379"));
+
+    await driver.connect();
+
+    expect(consoleSpy).not.toHaveBeenCalled();
+    expect(fatalSpy).toHaveBeenCalled();
+
+    for (const call of fatalSpy.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("s3cr3t");
+    }
+
+    const context = fatalSpy.mock.calls[0][3] as { message?: string };
+    expect(context?.message).toBe("connect ECONNREFUSED redis://[REDACTED]@h:6379");
+
+    connectSpy.mockRestore();
   });
 
   it("includes auth credentials when provided", async () => {
@@ -330,12 +377,56 @@ describe("RedisCacheDriver", () => {
 
     await driver.set("tenant.other", "x");
 
-    const keysSpy = vi.spyOn(fakeClient, "keys");
+    const scanSpy = vi.spyOn(fakeClient, "scanIterator");
 
     await driver.removeNamespace("tenant*evil?");
 
-    expect(keysSpy).toHaveBeenCalledWith("tenant\\*evil\\?*");
+    expect(scanSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ MATCH: "tenant\\*evil\\?*" }),
+    );
     await expect(driver.get("tenant.other")).resolves.toBe("x");
+  });
+
+  it("removeNamespace uses non-blocking SCAN instead of the blocking KEYS command", async () => {
+    const RedisCacheDriver = await importDriver();
+    const driver = new RedisCacheDriver();
+    driver.setLoggingState(false);
+    driver.setOptions({ url: "redis://localhost" });
+    await driver.connect();
+
+    await driver.set("user.profile", { name: "John" });
+    await driver.set("user.totals", { posts: 1 });
+    await driver.set("other", "x");
+
+    const keysSpy = vi.spyOn(fakeClient, "keys");
+    const scanSpy = vi.spyOn(fakeClient, "scanIterator");
+
+    const deleted = await driver.removeNamespace("user");
+
+    expect(keysSpy).not.toHaveBeenCalled();
+    expect(scanSpy).toHaveBeenCalled();
+    expect(deleted).toBeDefined();
+    expect(deleted!.length).toBe(2);
+  });
+
+  it("removeNamespace drains a SCAN cursor spanning multiple batches", async () => {
+    const RedisCacheDriver = await importDriver();
+    const driver = new RedisCacheDriver();
+    driver.setLoggingState(false);
+    driver.setOptions({ url: "redis://localhost" });
+    await driver.connect();
+
+    // More entries than the mock's default SCAN batch size (10), so the
+    // driver must consume more than one simulated cursor batch.
+    for (let i = 0; i < 25; i++) {
+      await driver.set(`bulk.item${i}`, i);
+    }
+
+    const deleted = await driver.removeNamespace("bulk");
+
+    expect(deleted).toBeDefined();
+    expect(deleted!.length).toBe(25);
+    expect(fakeClient.store.size).toBe(0);
   });
 
   it("increment and decrement use native INCRBY/DECRBY", async () => {

@@ -92,6 +92,59 @@ describe("FileCacheDriver", () => {
     await expect(driver.removeNamespace("unknown")).resolves.toBe(driver);
   });
 
+  describe("removeNamespace clears dotted keys", () => {
+    // Dotted keys (`ns.a`) are stored as *sibling* directories, not nested
+    // ones — a directory literally named `ns` rarely exists on its own.
+    it("removes every key logically under the namespace, not just a same-named directory", async () => {
+      await driver.set("user.profile", { name: "John" });
+      await driver.set("user.totals", { posts: 1 });
+      await driver.set("other", "x");
+
+      await driver.removeNamespace("user");
+
+      await expect(driver.get("user.profile")).resolves.toBeNull();
+      await expect(driver.get("user.totals")).resolves.toBeNull();
+      await expect(driver.get("other")).resolves.toBe("x");
+    });
+
+    it("also removes a key exactly matching the namespace itself", async () => {
+      await driver.set("user", "root-value");
+      await driver.set("user.profile", { name: "John" });
+
+      await driver.removeNamespace("user");
+
+      await expect(driver.get("user")).resolves.toBeNull();
+      await expect(driver.get("user.profile")).resolves.toBeNull();
+    });
+
+    it("does not remove keys that merely share a prefix without the dot boundary", async () => {
+      await driver.set("user.profile", { name: "John" });
+      await driver.set("userland", "unrelated");
+
+      await driver.removeNamespace("user");
+
+      await expect(driver.get("user.profile")).resolves.toBeNull();
+      await expect(driver.get("userland")).resolves.toBe("unrelated");
+    });
+
+    it("honors globalPrefix, scoping removal to the tenant instead of the whole cache root", async () => {
+      driver.setOptions({ directory: () => directory, globalPrefix: "tenantA" });
+      await driver.connect();
+      await driver.set("user.profile", { name: "John" });
+
+      driver.setOptions({ directory: () => directory, globalPrefix: "tenantB" });
+      await driver.connect();
+      await driver.set("user.profile", { name: "Jane" });
+
+      await driver.removeNamespace("user");
+
+      await expect(driver.get("user.profile")).resolves.toBeNull();
+
+      driver.setOptions({ directory: () => directory, globalPrefix: "tenantA" });
+      await expect(driver.get("user.profile")).resolves.toEqual({ name: "John" });
+    });
+  });
+
   it("update and merge throw CacheUnsupportedError", async () => {
     // The file driver intentionally narrows update/merge to a no-arg
     // `(): Promise<never>` signature; call through the CacheDriver contract

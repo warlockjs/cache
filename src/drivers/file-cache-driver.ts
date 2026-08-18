@@ -1,6 +1,7 @@
 import {
   ensureDirectoryAsync,
   getJsonFileAsync,
+  listDirectoriesAsync,
   putJsonFileAsync,
   removeDirectoryAsync,
 } from "@warlock.js/fs";
@@ -78,12 +79,32 @@ export class FileCacheDriver
    * only ever produces a single filesystem component here.
    */
   protected keyDirectory(parsedKey: string): string {
-    const encoded = parsedKey
+    return this.containedPath(this.encodeKeySegment(parsedKey));
+  }
+
+  /**
+   * Percent-encode a parsed key into an inert, single-component directory
+   * name. Dots are left untouched — see {@link keyDirectory}.
+   */
+  protected encodeKeySegment(parsedKey: string): string {
+    return parsedKey
       .replace(/%/g, "%25")
       .replace(/\//g, "%2F")
       .replace(/\\/g, "%5C");
+  }
 
-    return this.containedPath(encoded);
+  /**
+   * Reverse of {@link encodeKeySegment} — recovers the logical, dot-delimited
+   * parsed key from an on-disk directory name. Used by {@link removeNamespace}
+   * to test which sibling directories logically belong to a namespace, since
+   * dotted keys (`ns.a`) are stored as sibling directories rather than nested
+   * ones (see {@link keyDirectory}'s doc comment).
+   */
+  protected decodeKeySegment(encoded: string): string {
+    return encoded
+      .replace(/%2F/g, "/")
+      .replace(/%5C/g, "\\")
+      .replace(/%25/g, "%");
   }
 
   /**
@@ -111,12 +132,41 @@ export class FileCacheDriver
 
   /**
    * {@inheritdoc}
+   *
+   * Dotted keys (`ns.a`) are stored as sibling directories, not nested ones
+   * (see {@link keyDirectory}) — a directory literally named `<namespace>`
+   * rarely exists on its own. Namespace removal therefore has to scan the
+   * cache root's immediate children and remove every directory whose
+   * *logical* (decoded) name equals the namespace or starts with
+   * `<namespace>.`, mirroring the `key = $1 OR key LIKE $2` boundary
+   * semantics the `pg` driver already uses for the same contract.
    */
   public async removeNamespace(namespace: string) {
+    const parsedNamespace = this.parseKey(namespace);
+
     this.log("clearing", namespace);
 
     try {
-      await removeDirectoryAsync(this.keyDirectory(namespace));
+      const root = this.containedPath("");
+
+      if (parsedNamespace === "") {
+        await removeDirectoryAsync(root);
+        this.log("cleared", namespace);
+        return this;
+      }
+
+      const prefix = `${parsedNamespace}.`;
+      const entries = await listDirectoriesAsync(root).catch(() => [] as string[]);
+
+      await Promise.all(
+        entries.map(async (entryPath) => {
+          const decoded = this.decodeKeySegment(path.basename(entryPath));
+
+          if (decoded === parsedNamespace || decoded.startsWith(prefix)) {
+            await removeDirectoryAsync(entryPath);
+          }
+        }),
+      );
 
       this.log("cleared", namespace);
     } catch (error) {

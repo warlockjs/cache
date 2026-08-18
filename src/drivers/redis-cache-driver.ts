@@ -10,6 +10,7 @@ import type {
   RedisOptions,
 } from "../types";
 import { CacheConfigurationError, CacheUnsupportedError } from "../types";
+import { safeErrorInfo } from "../utils";
 import { BaseCacheDriver } from "./base-cache-driver";
 
 // ============================================================
@@ -90,9 +91,21 @@ export class RedisCacheDriver
     // cannot widen the match and delete keys outside its own prefix.
     const pattern = namespace.replace(/[\\*?[\]]/g, "\\$&");
 
-    const keys = await this.client?.keys(`${pattern}*`);
+    // `SCAN` (cursor-based, non-blocking) instead of `KEYS` — `KEYS` is O(N)
+    // and blocks the single-threaded Redis event loop for the full scan,
+    // which can stall every other tenant/consumer on a large keyspace.
+    const keys: string[] = [];
 
-    if (!keys || keys.length === 0) {
+    if (this.client) {
+      for await (const key of this.client.scanIterator({
+        MATCH: `${pattern}*`,
+        COUNT: 100,
+      })) {
+        keys.push(key as unknown as string);
+      }
+    }
+
+    if (keys.length === 0) {
       this.log("notFound", namespace);
       return;
     }
@@ -351,10 +364,15 @@ export class RedisCacheDriver
       this.client = createClient(clientOptions);
 
       this.client.on("error", (error: Error) => {
+        // Never pass the raw `error` object to the logger — connection
+        // errors can carry the connection URL (with password) in the
+        // message/cause. Only the redacted message survives past this point.
+        const { message } = safeErrorInfo(error);
+
         if ((error as any).code === "ECONNREFUSED") {
-          this.log("connectionFailed", error);
+          this.log("connectionFailed", message);
         } else {
-          this.log("error", error.message);
+          this.log("error", message);
         }
       });
 
@@ -363,12 +381,12 @@ export class RedisCacheDriver
       this.log("connected");
       await this.emit("connected");
     } catch (error) {
-      console.log("Err", error);
-
       // Boot-time cache connection failure is unrecoverable in practice —
       // `fatal` aligns Redis with the cascade drivers and herald connector
-      // for clean "page on fatal only" alerting.
-      log.fatal("cache", "redis", error);
+      // for clean "page on fatal only" alerting. Only the redacted
+      // `{ message, code }` shape is logged; the raw error (which may carry
+      // the connection URL/password) never reaches stdout or the logger.
+      log.fatal("cache", "redis", "Failed to connect", safeErrorInfo(error));
       await this.emit("error", { error });
     }
   }

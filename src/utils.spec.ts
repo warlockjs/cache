@@ -9,7 +9,9 @@ import {
   normalizeToRememberOptions,
   parseCacheKey,
   parseTtl,
+  redactCredentials,
   resolveTtl,
+  safeErrorInfo,
 } from "./utils";
 
 describe("parseCacheKey", () => {
@@ -257,5 +259,52 @@ describe("resolveTtl", () => {
 
   it("throws when both ttl and expiresAt are supplied", () => {
     expect(() => resolveTtl(60, Date.now() + 60_000, 9999)).toThrow(CacheConfigurationError);
+  });
+});
+
+describe("redactCredentials", () => {
+  it("masks user:pass credentials embedded in a redis connection URL", () => {
+    expect(redactCredentials("connect ECONNREFUSED redis://user:s3cr3t@10.0.0.1:6379")).toBe(
+      "connect ECONNREFUSED redis://[REDACTED]@10.0.0.1:6379",
+    );
+  });
+
+  it("masks credentials regardless of scheme (postgres, rediss, ...)", () => {
+    expect(redactCredentials("failed: postgres://admin:hunter2@db.internal:5432/app")).toBe(
+      "failed: postgres://[REDACTED]@db.internal:5432/app",
+    );
+    expect(redactCredentials("rediss://u:p@host")).toBe("rediss://[REDACTED]@host");
+  });
+
+  it("leaves messages with no embedded credentials untouched", () => {
+    expect(redactCredentials("getaddrinfo ENOTFOUND host.example.com")).toBe(
+      "getaddrinfo ENOTFOUND host.example.com",
+    );
+  });
+});
+
+describe("safeErrorInfo", () => {
+  it("extracts only a redacted message and code from an Error", () => {
+    const error = new Error("connect ECONNREFUSED redis://user:s3cr3t@10.0.0.1:6379");
+    (error as any).code = "ECONNREFUSED";
+
+    const info = safeErrorInfo(error);
+
+    expect(info).toEqual({
+      message: "connect ECONNREFUSED redis://[REDACTED]@10.0.0.1:6379",
+      code: "ECONNREFUSED",
+    });
+    // Never the raw error object — only the redacted shape.
+    expect(JSON.stringify(info)).not.toContain("s3cr3t");
+  });
+
+  it("omits code when the error carries none", () => {
+    const info = safeErrorInfo(new Error("boom"));
+    expect(info).toEqual({ message: "boom" });
+  });
+
+  it("stringifies and redacts non-Error thrown values", () => {
+    const info = safeErrorInfo("redis://user:s3cr3t@host failed");
+    expect(info.message).toBe("redis://[REDACTED]@host failed");
   });
 });

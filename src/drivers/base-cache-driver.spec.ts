@@ -78,6 +78,65 @@ describe("BaseCacheDriver behaviors", () => {
   });
 });
 
+describe("BaseCacheDriver logError — never leaks raw error objects/credentials", () => {
+  let driver: MemoryCacheDriver;
+
+  beforeEach(() => {
+    driver = new MemoryCacheDriver();
+    driver.setOptions({});
+    driver.setLoggingState(false);
+  });
+
+  afterEach(async () => {
+    await driver.disconnect();
+    vi.restoreAllMocks();
+  });
+
+  it("never calls console.log with the raw error when a handler throws", async () => {
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const credentialError = new Error(
+      "connect ECONNREFUSED redis://user:s3cr3t@10.0.0.1:6379",
+    );
+    driver.on("connected", () => {
+      throw credentialError;
+    });
+
+    await driver.connect();
+
+    expect(consoleSpy).not.toHaveBeenCalled();
+  });
+
+  it("routes only a redacted { message, code } shape to the structured logger, never the raw error", async () => {
+    const { log } = await import("@warlock.js/logger");
+    const errorSpy = vi.spyOn(log, "error").mockImplementation(() => log as any);
+
+    const credentialError = new Error(
+      "connect ECONNREFUSED redis://user:s3cr3t@10.0.0.1:6379",
+    );
+    (credentialError as any).code = "ECONNREFUSED";
+
+    driver.on("connected", () => {
+      throw credentialError;
+    });
+
+    await driver.connect();
+
+    expect(errorSpy).toHaveBeenCalled();
+    const [, , , context] = errorSpy.mock.calls[0];
+    expect(context).toEqual({
+      message: "connect ECONNREFUSED redis://[REDACTED]@10.0.0.1:6379",
+      code: "ECONNREFUSED",
+    });
+
+    // No call to the logger anywhere in this flow may carry the raw
+    // credential-bearing error object or the plaintext password.
+    for (const call of errorSpy.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("s3cr3t");
+    }
+  });
+});
+
 /**
  * Driver-level `options.ttl` MUST be honored across every shape of the third
  * `set` argument — positional caller TTL wins, but absence (undefined / null /

@@ -27,6 +27,7 @@ import {
   parseCacheKey,
   parseTtl,
   resolveTtl,
+  safeErrorInfo,
 } from "../utils";
 
 /**
@@ -660,11 +661,17 @@ export abstract class BaseCacheDriver<
 
   /**
    * Log error message
+   *
+   * Never logs the raw `error` object — driver connection errors (Redis,
+   * Postgres, ...) can carry the connection string, including the password,
+   * in the message/cause. Only a redacted `{ message, code }` shape is
+   * passed to the structured logger.
    */
   protected logError(message: string, error?: any) {
-    log.error("cache." + this.name, "error", message);
     if (error) {
-      console.log(error);
+      log.error("cache." + this.name, "error", message, safeErrorInfo(error));
+    } else {
+      log.error("cache." + this.name, "error", message);
     }
   }
 
