@@ -59,6 +59,14 @@ options: {
 }
 ```
 
+## Key & namespace safety (file / redis)
+
+Cache keys can carry untrusted input (e.g. a `cached()` auto-key derived from a request param), so every built-in driver treats a key as data, never as a path or a query fragment:
+
+- **`file`** — a key/namespace maps to exactly one on-disk directory component: `%`, `/`, and `\` are percent-encoded before the path is built, so `../../etc` becomes an inert directory name instead of a traversal. The resolved path is also asserted to stay inside the configured cache root (throws `CacheError` otherwise) — a second, encoding-independent check. `removeNamespace` clears both the namespace's own directory and every dotted child (`ns`, `ns.*`), honoring `globalPrefix`.
+- **`redis`** — `removeNamespace` escapes glob metacharacters (`*`, `?`, `[`, `\`) in the namespace before building its match pattern, and walks matches with a `SCAN` cursor (`scanIterator`) instead of the blocking `KEYS` command, so clearing a namespace on a large keyspace doesn't stall the event loop for other tenants.
+- **Errors that echo a connection string** (Redis `connect()` failures, any driver's failed op) are logged through a `safeErrorInfo()` helper that redacts `scheme://user:pass@` credentials to `scheme://[REDACTED]@` and never prints the raw `Error` object — see [`@warlock.js/cache/handle-cache-errors/SKILL.md`](@warlock.js/cache/handle-cache-errors/SKILL.md).
+
 ## Registering a custom driver
 
 ```ts

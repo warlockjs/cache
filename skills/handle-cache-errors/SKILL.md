@@ -26,6 +26,7 @@ import {
 | `CacheDriverNotInitializedError` | Any data op called before `cache.init()` / `cache.use()` | Call `cache.init()` at app startup. Tests often forget this — add a `beforeEach`. |
 | `CacheUnsupportedError` | Driver doesn't implement the requested op. Today: `update` / `merge` on the file driver; `set({ vector })` and `similar()` on file / redis / pg-without-`vector`-config. | Switch driver (memory family for dev similarity, `pg` with `vector` config for production), or queue the op. |
 | `CacheConcurrencyError` | Declared for future optimistic-concurrency exhaustion on Redis `update()` | Not thrown today. Reserved for the v2.1 `WATCH`/`MULTI` implementation. |
+| `CacheError` (file driver, path containment) | A key/namespace, after percent-encoding, still resolves outside the cache root — `"Cache key resolves outside the cache directory: ..."`. Last line of defense against path traversal on top of the encoding step; should not happen in normal use. | Treat as a programmer/attacker-input error — don't retry; investigate the key source. See [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md) for the encoding contract. |
 
 ## Special case — `setNX` unsupported
 

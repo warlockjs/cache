@@ -479,6 +479,7 @@ import {
 | `CacheDriverNotInitializedError` | Any data op called before `cache.init()` / `cache.use()` | Call `cache.init()` at app startup. Tests often forget this — add a `beforeEach`. |
 | `CacheUnsupportedError` | Driver doesn't implement the requested op. Today: `update` / `merge` on the file driver; `set({ vector })` and `similar()` on file / redis / pg-without-`vector`-config. | Switch driver (memory family for dev similarity, `pg` with `vector` config for production), or queue the op. |
 | `CacheConcurrencyError` | Declared for future optimistic-concurrency exhaustion on Redis `update()` | Not thrown today. Reserved for the v2.1 `WATCH`/`MULTI` implementation. |
+| `CacheError` (file driver, path containment) | A key/namespace, after percent-encoding, still resolves outside the cache root — `"Cache key resolves outside the cache directory: ..."`. Last line of defense against path traversal on top of the encoding step; should not happen in normal use. | Treat as a programmer/attacker-input error — don't retry; investigate the key source. See [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md) for the encoding contract. |
 
 ## Special case — `setNX` unsupported
 
@@ -786,6 +787,14 @@ options: {
   },
 }
 ```
+
+## Key & namespace safety (file / redis)
+
+Cache keys can carry untrusted input (e.g. a `cached()` auto-key derived from a request param), so every built-in driver treats a key as data, never as a path or a query fragment:
+
+- **`file`** — a key/namespace maps to exactly one on-disk directory component: `%`, `/`, and `\` are percent-encoded before the path is built, so `../../etc` becomes an inert directory name instead of a traversal. The resolved path is also asserted to stay inside the configured cache root (throws `CacheError` otherwise) — a second, encoding-independent check. `removeNamespace` clears both the namespace's own directory and every dotted child (`ns`, `ns.*`), honoring `globalPrefix`.
+- **`redis`** — `removeNamespace` escapes glob metacharacters (`*`, `?`, `[`, `\`) in the namespace before building its match pattern, and walks matches with a `SCAN` cursor (`scanIterator`) instead of the blocking `KEYS` command, so clearing a namespace on a large keyspace doesn't stall the event loop for other tenants.
+- **Errors that echo a connection string** (Redis `connect()` failures, any driver's failed op) are logged through a `safeErrorInfo()` helper that redacts `scheme://user:pass@` credentials to `scheme://[REDACTED]@` and never prints the raw `Error` object — see [`@warlock.js/cache/handle-cache-errors/SKILL.md`](@warlock.js/cache/handle-cache-errors/SKILL.md).
 
 ## Registering a custom driver
 
@@ -1450,7 +1459,7 @@ await cache.set("user:2:profile", otherProfile);
 await cache.removeNamespace("user.1");  // drops both user:1 entries, keeps user:2
 ```
 
-Cheaper than tags (no reverse index to maintain). Every real driver supports it — memory family and `lru` by prefix-scan, `file` by directory, `redis`/`pg` by key/`LIKE` prefix; `null` no-ops. See [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md).
+Cheaper than tags (no reverse index to maintain). Every real driver supports it — memory family and `lru` by prefix-scan, `file` by directory (including dotted sibling keys like `ns.a`), `redis` by non-blocking `SCAN` (not `KEYS`), `pg` by key/`LIKE` prefix; `null` no-ops. Namespace strings are treated as data, not glob/path input — see [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md) for the file-path-containment and redis-glob-escaping details.
 
 ## Multi-tenant scoping at the driver level
 

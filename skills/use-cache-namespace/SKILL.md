@@ -51,7 +51,7 @@ await cache.set("user:2:profile", otherProfile);
 await cache.removeNamespace("user.1");  // drops both user:1 entries, keeps user:2
 ```
 
-Cheaper than tags (no reverse index to maintain). Every real driver supports it — memory family and `lru` by prefix-scan, `file` by directory, `redis`/`pg` by key/`LIKE` prefix; `null` no-ops. See [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md).
+Cheaper than tags (no reverse index to maintain). Every real driver supports it — memory family and `lru` by prefix-scan, `file` by directory (including dotted sibling keys like `ns.a`), `redis` by non-blocking `SCAN` (not `KEYS`), `pg` by key/`LIKE` prefix; `null` no-ops. Namespace strings are treated as data, not glob/path input — see [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md) for the file-path-containment and redis-glob-escaping details.
 
 ## Multi-tenant scoping at the driver level
 
