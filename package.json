@@ -1,9 +1,9 @@
 {
   "name": "@warlock.js/cache",
-  "version": "4.16.0",
+  "version": "5.0.0",
   "type": "module",
   "description": "A Robust Cache Manager for Nodejs",
-  "main": "./cjs/index.js",
+  "main": "./src/index.ts",
   "dependencies": {
     "@warlock.js/fs": "*",
     "@mongez/reinforcements": "^4.0.1",
@@ -46,6 +46,6 @@
   ],
   "author": "hassanzohdy",
   "license": "MIT",
-  "module": "./esm/index.js",
-  "typings": "./cjs/index.d.ts"
+  "module": "./src/index.ts",
+  "typings": "./src/index.ts"
 }
