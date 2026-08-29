@@ -4,6 +4,9 @@
   "type": "module",
   "description": "A Robust Cache Manager for Nodejs",
   "main": "./src/index.ts",
+  "warlock": {
+    "environment": "server"
+  },
   "dependencies": {
     "@warlock.js/fs": "*",
     "@mongez/reinforcements": "^4.0.1",
