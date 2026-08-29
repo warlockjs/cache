@@ -12,6 +12,10 @@ Cache manager for nodejs applications.
 - **Global Prefix**: Every driver has a global prefix function, this function is called each time an operation is performed, and it returns a string, this string is used as a prefix for the key.
 - **Namespace**: The cache manager allows you to clear the cache for a specific namespace, this is useful when working with multi-tenant applications.
 
+## Server-only
+
+`@warlock.js/cache`'s entire runtime surface is server-only — its `package.json` declares `"warlock": { "environment": "server" }`. `@warlock.js/web`'s build treats this as a boundary: app client code cannot value-import this package (type-only imports are still allowed), while server loaders/controllers/modules can import it freely.
+
 ## Installation
 
 `yarn create @mongez/warlock.cache`
