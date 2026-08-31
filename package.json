@@ -8,9 +8,9 @@
     "environment": "server"
   },
   "dependencies": {
-    "@warlock.js/fs": "*",
+    "@warlock.js/fs": "workspace:^",
     "@mongez/reinforcements": "^4.0.1",
-    "@warlock.js/logger": "*",
+    "@warlock.js/logger": "workspace:^",
     "ms": "^2.1.3"
   },
   "peerDependencies": {
@@ -50,5 +50,9 @@
   "author": "hassanzohdy",
   "license": "MIT",
   "module": "./src/index.ts",
-  "typings": "./src/index.ts"
+  "typings": "./src/index.ts",
+  "devDependencies": {
+    "vitest": "4.1.10"
+  },
+  "packageManager": "pnpm@11.24.0"
 }
