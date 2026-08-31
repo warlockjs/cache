@@ -1,5 +1,5 @@
 import { rtrim } from "@mongez/reinforcements";
-import ms, { StringValue } from "ms";
+import ms, { type StringValue } from "ms";
 import type { CacheKey, CacheSetOptions, CacheTtl, RememberOptions } from "./types";
 import { CacheConfigurationError } from "./types";
 
