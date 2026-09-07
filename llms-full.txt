@@ -123,7 +123,7 @@ Server-only: `package.json` declares `"warlock": { "environment": "server" }`. `
 ## Install
 
 ```bash
-yarn add @warlock.js/cache
+npm install @warlock.js/cache
 ```
 
 ## Foundations

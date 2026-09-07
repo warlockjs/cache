@@ -14,7 +14,7 @@ Server-only: `package.json` declares `"warlock": { "environment": "server" }`. `
 ## Install
 
 ```bash
-pnpm add @warlock.js/cache
+npm install @warlock.js/cache
 ```
 
 ## Foundations
