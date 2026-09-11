@@ -4,6 +4,16 @@ All notable changes to `@warlock.js/cache` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). `@warlock.js/*` packages are released in lockstep — every package shares the same version number, so a version below may list only the changes that affected this package.
 
+## 5.7.0
+
+### Fixed
+
+- The in-memory cache driver's expiry sweep iterated `for...in` while deleting entries from the same object it was iterating, which could skip not-yet-visited keys and leave them cached past their TTL. It now snapshots entries first.
+
+### Changed
+
+- Internal type-safety hardening elsewhere (similarity scoring, percentile calculation); no behaviour change.
+
 ## 5.5.0 - 2026-09-07
 
 ### Fixed
