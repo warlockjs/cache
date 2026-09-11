@@ -263,6 +263,18 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   for (let i = 0; i < a.length; i++) {
     const x = a[i];
     const y = b[i];
+
+    if (x === undefined || y === undefined) {
+      // Unreachable: both guards above establish `a.length === b.length` and
+      // a non-zero length, so every index in range exists on both sides. Said
+      // out loud rather than asserted with `as number`, because the two guards
+      // that make it true are the kind of thing a later edit removes — and if
+      // one ever did, an assertion would let `undefined` into the arithmetic
+      // and return NaN as a similarity SCORE. A silently wrong ranking is
+      // worse than a stopped one.
+      break;
+    }
+
     dot += x * y;
     normA += x * x;
     normB += y * y;

@@ -208,7 +208,12 @@ export class CacheMetricsCollector {
     const pick = (quantile: number): number => {
       const index = Math.min(sorted.length - 1, Math.floor(quantile * sorted.length));
 
-      return sorted[index];
+      // `sorted` is non-empty (the `samples.length === 0` early return above)
+      // and `index` is clamped to its last element, so this always hits — but
+      // the clamp is arithmetic the compiler does not evaluate. `?? 0` states
+      // the floor without asserting: a percentile of an empty set is 0, which
+      // is exactly what the early return above already answers.
+      return sorted[index] ?? 0;
     };
 
     return {

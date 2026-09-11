@@ -77,9 +77,15 @@ export class MemoryCacheDriver
     this.cleanupInterval = setInterval(async () => {
       const now = Date.now();
 
-      for (const key in this.temporaryData) {
-        if (this.temporaryData[key].expiresAt <= now) {
-          await this.remove(this.temporaryData[key].key);
+      // `Object.entries` rather than `for...in` + index. Two reasons, and the
+      // second is not about types at all: under `noUncheckedIndexedAccess` the
+      // index read is `T | undefined`, AND this loop DELETES from the object it
+      // is iterating. `for...in` over a mutating object has
+      // implementation-defined behaviour for keys not yet visited; entries
+      // snapshots first, so the deletion below is unambiguous.
+      for (const [key, entry] of Object.entries(this.temporaryData)) {
+        if (entry.expiresAt <= now) {
+          await this.remove(entry.key);
           delete this.temporaryData[key];
 
           this.log("expired", key);
