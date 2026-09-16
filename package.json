@@ -7,6 +7,9 @@
   "warlock": {
     "environment": "server"
   },
+  "scripts": {
+    "typecheck": "node ../node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
+  },
   "dependencies": {
     "@warlock.js/fs": "workspace:^",
     "@mongez/reinforcements": "^4.0.1",
