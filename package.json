@@ -8,7 +8,7 @@
     "environment": "server"
   },
   "scripts": {
-    "typecheck": "node ../node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@warlock.js/fs": "workspace:^",
@@ -55,7 +55,8 @@
   "module": "./src/index.ts",
   "typings": "./src/index.ts",
   "devDependencies": {
-    "vitest": "4.1.10"
+    "vitest": "4.1.10",
+    "typescript": "^5.9.3"
   },
   "packageManager": "pnpm@11.24.0"
 }
