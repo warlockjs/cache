@@ -4,6 +4,12 @@ All notable changes to `@warlock.js/cache` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). `@warlock.js/*` packages are released in lockstep — every package shares the same version number, so a version below may list only the changes that affected this package.
 
+## 5.13.0 - 2026-09-17
+
+### Changed
+
+- Portable `typecheck` script: runs against this package's own `typescript` devDependency instead of relying on a hoisted binary from elsewhere in the workspace.
+
 ## 5.11.0 - 2026-09-14
 
 _Released in lockstep with the `@warlock.js/*` family; no package-specific changes in 5.11.0._
