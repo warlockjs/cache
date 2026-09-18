@@ -4,6 +4,12 @@ All notable changes to `@warlock.js/cache` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). `@warlock.js/*` packages are released in lockstep — every package shares the same version number, so a version below may list only the changes that affected this package.
 
+## 5.15.0 - 2026-09-18
+
+### Fixed
+
+- This package declares a `test` script, so its 23 spec files and 525 tests actually run in the release gate. They existed and passed, but with no script to invoke them the gate reported `SKIPPED (no "test" script)` on every release and nothing here was ever checked before publishing.
+
 ## 5.13.0 - 2026-09-17
 
 ### Changed
