@@ -642,7 +642,7 @@ export abstract class BaseCacheDriver<
     }
 
     if (operation == "notFound" || operation == "expired") {
-      return log.warn(
+      return log.info(
         "cache." + this.name,
         operation,
         (key ? key + " " : "") + messages[operation],

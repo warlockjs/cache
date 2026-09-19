@@ -333,10 +333,7 @@ export class MemoryCacheDriver
       return;
     }
 
-    while (
-      this.getCacheSize() > this.options.maxSize &&
-      this.accessOrder.length > 0
-    ) {
+    while (this.getCacheSize() > this.options.maxSize && this.accessOrder.length > 0) {
       const lruKey = this.accessOrder.shift();
       if (!lruKey) {
         break;
@@ -381,11 +378,24 @@ export class MemoryCacheDriver
         continue;
       }
 
-      const value = (await this.get(parsedKey)) as T | null;
-      // get() returns null for expired entries — and remove() drops the vector
-      // index, so the next pass won't see it. Skip in case of timing.
-      if (value === null) {
+      // Read the entry directly by its already-parsed key — this.get() would
+      // parse it again and apply globalPrefix twice, missing every entry.
+      const entry: CacheData | undefined = get(this.data, parsedKey);
+
+      if (!entry) {
         continue;
+      }
+
+      if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
+        continue;
+      }
+
+      let value: any = entry.data;
+      if (value !== null && value !== undefined) {
+        const type = typeof value;
+        if (type !== "string" && type !== "number" && type !== "boolean") {
+          value = structuredClone(value);
+        }
       }
 
       const score = cosineSimilarity(vector, stored);

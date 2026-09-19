@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## 5.17.0 (Unreleased)
 
+### Changed
+
+- Cache misses and expiries log at `info` instead of `warn`. A cache miss or expiry is normal behaviour, not a warning.
+
 ### Fixed
 
 - `cache.tags([...]).invalidate()` now deletes the tagged entries when a `globalPrefix` is configured, whether static (`"store"`) or a function. Before, the tag index stored each key with the prefix already applied, and invalidation passed that key back through `remove()`, which applied the prefix a second time. So it dropped the tag index but deleted none of the tagged entries, and reads stayed stale until TTL. Every scaffolded app sets a `globalPrefix`. The tag index now stores the un-prefixed key in all of these paths: `tags().set()`, inline `set(key, value, { tags })`, `tags().remove()`, the scoped `cache.namespace(...).tags(...)` handle (including `setNX`), and the `similar()` tag filter. `remove()` applies the prefix exactly once, on every driver. With a function prefix, invalidation uses the prefix that is current when it runs, which is the same prefix the tag index itself is read under. The two therefore agree as long as the prefix is stable for a given app or tenant.
