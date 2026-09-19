@@ -266,6 +266,8 @@ export abstract class BaseCacheDriver<
    * Used by `similar()` to narrow the candidate pool before similarity ranking.
    *
    * Returns `null` when no tags are passed (callers should treat that as "no filter").
+   * Keys come back parsed (prefixed) — the index stores them un-prefixed, but
+   * callers match them against their own parsed storage keys.
    */
   protected async getKeysForTags(
     tags: string[] | undefined,
@@ -279,7 +281,7 @@ export abstract class BaseCacheDriver<
       const tagKey = `cache:tags:${tag}`;
       const keys = ((await this.get(tagKey)) as string[] | null) || [];
       for (const k of keys) {
-        allKeys.add(k);
+        allKeys.add(this.parseKey(k));
       }
     }
 
@@ -289,14 +291,17 @@ export abstract class BaseCacheDriver<
   /**
    * Apply tag relationships after a successful write. Called by drivers once
    * the value is in storage.
+   *
+   * Pass the caller's key, not the parsed one: the tag index stores keys
+   * un-prefixed so `invalidate()` can delete them through `remove(key)`.
    */
-  protected async applyTags(parsedKey: string, tags: string[]): Promise<void> {
+  protected async applyTags(key: CacheKey, tags: string[]): Promise<void> {
     if (tags.length === 0) {
       return;
     }
 
     const tagged = this.tags(tags);
-    await (tagged as TaggedCache).storeTagRelationship(parsedKey);
+    await (tagged as TaggedCache).storeTagRelationship(key);
   }
 
   /**

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ScopedCache } from "../scoped-cache";
 import type { CacheSetResult, PgClientLike } from "../types";
 import { CacheConfigurationError, CacheUnsupportedError } from "../types";
 import { cosineSimilarity } from "../utils";
@@ -810,5 +811,55 @@ describe("PgCacheDriver — SWR (stale_at column)", () => {
     expect(entry!.data).toEqual({ name: "Alice" });
     expect(entry!.staleAt).toBe(future);
     expect(entry!.expiresAt).toBeGreaterThan(Date.now());
+  });
+});
+
+describe.each([
+  { label: 'static prefix "store"', globalPrefix: "store" as string | (() => string) },
+  { label: 'function prefix () => "store"', globalPrefix: () => "store" },
+])("PgCacheDriver — tag invalidation with a globalPrefix ($label)", ({ globalPrefix }) => {
+  let driver: PgCacheDriver;
+  let pool: FakePool;
+
+  beforeEach(async () => {
+    pool = new FakePool();
+    driver = new PgCacheDriver();
+    driver.setOptions({ client: pool, globalPrefix });
+    driver.setLoggingState(false);
+    await driver.connect();
+  });
+
+  afterEach(async () => {
+    await driver.disconnect();
+  });
+
+  it("invalidate() drops tags().set() and inline-tagged entries, sparing neighbours", async () => {
+    await driver.tags(["t"]).set("k", "v");
+    await driver.set("k2", "v2", { tags: ["t"] });
+    await driver.set("neighbour", "n");
+    await driver.set("other", "o", { tags: ["u"] });
+
+    await driver.tags(["t"]).invalidate();
+
+    await expect(driver.get("k")).resolves.toBeNull();
+    await expect(driver.get("k2")).resolves.toBeNull();
+    await expect(driver.get("neighbour")).resolves.toBe("n");
+    await expect(driver.get("other")).resolves.toBe("o");
+    expect(pool.store.has("store.k")).toBe(false);
+    expect(pool.store.has("store.k2")).toBe(false);
+  });
+
+  it("scoped tags().invalidate() drops the scoped entries only", async () => {
+    const scope = new ScopedCache(driver, "ns");
+
+    await scope.tags(["t"]).set("k", "v");
+    await scope.set("k2", "v2", { tags: ["t"] });
+    await scope.set("neighbour", "n");
+
+    await scope.tags(["t"]).invalidate();
+
+    await expect(scope.get("k")).resolves.toBeNull();
+    await expect(scope.get("k2")).resolves.toBeNull();
+    await expect(scope.get("neighbour")).resolves.toBe("n");
   });
 });

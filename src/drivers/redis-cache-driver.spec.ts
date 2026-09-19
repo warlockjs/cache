@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ScopedCache } from "../scoped-cache";
 import { CacheConfigurationError } from "../types";
 
 type Handler = (...args: unknown[]) => void;
@@ -600,6 +601,63 @@ describe("RedisCacheDriver", () => {
       const remaining = await fakeClient.ttl(driver.parseKey("a"));
       expect(remaining).toBeGreaterThan(0);
       expect(remaining).toBeLessThanOrEqual(120);
+    });
+  });
+});
+
+describe("RedisCacheDriver — tag invalidation with a globalPrefix", () => {
+  beforeAll(async () => {
+    await importDriver();
+  }, 60000);
+
+  beforeEach(async () => {
+    await fakeClient.flushAll();
+  });
+
+  describe.each([
+    { label: 'static prefix "store"', globalPrefix: "store" as string | (() => string) },
+    { label: 'function prefix () => "store"', globalPrefix: () => "store" },
+  ])("$label", ({ globalPrefix }) => {
+    async function makeDriver() {
+      const RedisCacheDriver = await importDriver();
+      const driver = new RedisCacheDriver();
+      driver.setLoggingState(false);
+      driver.setOptions({ url: "redis://localhost", globalPrefix });
+      await driver.connect();
+      return driver;
+    }
+
+    it("invalidate() drops tags().set() and inline-tagged entries, sparing neighbours", async () => {
+      const driver = await makeDriver();
+
+      await driver.tags(["t"]).set("k", "v");
+      await driver.set("k2", "v2", { tags: ["t"] });
+      await driver.set("neighbour", "n");
+      await driver.set("other", "o", { tags: ["u"] });
+
+      await driver.tags(["t"]).invalidate();
+
+      await expect(driver.get("k")).resolves.toBeNull();
+      await expect(driver.get("k2")).resolves.toBeNull();
+      await expect(driver.get("neighbour")).resolves.toBe("n");
+      await expect(driver.get("other")).resolves.toBe("o");
+      expect(fakeClient.store.has("store.k")).toBe(false);
+      expect(fakeClient.store.has("store.k2")).toBe(false);
+    });
+
+    it("scoped tags().invalidate() drops the scoped entries only", async () => {
+      const driver = await makeDriver();
+      const scope = new ScopedCache(driver, "ns");
+
+      await scope.tags(["t"]).set("k", "v");
+      await scope.set("k2", "v2", { tags: ["t"] });
+      await scope.set("neighbour", "n");
+
+      await scope.tags(["t"]).invalidate();
+
+      await expect(scope.get("k")).resolves.toBeNull();
+      await expect(scope.get("k2")).resolves.toBeNull();
+      await expect(scope.get("neighbour")).resolves.toBe("n");
     });
   });
 });

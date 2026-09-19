@@ -137,13 +137,14 @@ export class TaggedScopedCache implements TaggedScopedCacheContract {
       return true;
     }
 
+    // Register the un-prefixed scoped key — the tag index never holds the
+    // driver-parsed form, so `invalidate()` can remove it via `remove(key)`.
     const scopedKey = this.buildScopedKey(key);
-    const parsedKey = this.scope.source.parseKey(scopedKey);
     const tagged = this.scope.source.tags(allTags) as unknown as {
-      storeTagRelationship: (parsed: string) => Promise<void>;
+      storeTagRelationship: (key: CacheKey) => Promise<void>;
     };
 
-    await tagged.storeTagRelationship(parsedKey);
+    await tagged.storeTagRelationship(scopedKey);
 
     return true;
   }

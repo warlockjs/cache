@@ -217,7 +217,7 @@ export class FileCacheDriver
     await putJsonFileAsync(path.resolve(fileDirectory, this.fileName), data);
 
     if (tags && tags.length > 0) {
-      await this.applyTags(parsedKey, tags);
+      await this.applyTags(key, tags);
     }
 
     this.log("cached", parsedKey);

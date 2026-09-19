@@ -4,6 +4,13 @@ All notable changes to `@warlock.js/cache` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). `@warlock.js/*` packages are released in lockstep — every package shares the same version number, so a version below may list only the changes that affected this package.
 
+## 5.16.1 (Unreleased)
+
+### Fixed
+
+- `cache.tags([...]).invalidate()` now deletes the tagged entries when a `globalPrefix` is configured, whether static (`"store"`) or a function. Before, the tag index stored each key with the prefix already applied, and invalidation passed that key back through `remove()`, which applied the prefix a second time. So it dropped the tag index but deleted none of the tagged entries, and reads stayed stale until TTL. Every scaffolded app sets a `globalPrefix`. The tag index now stores the un-prefixed key in all of these paths: `tags().set()`, inline `set(key, value, { tags })`, `tags().remove()`, the scoped `cache.namespace(...).tags(...)` handle (including `setNX`), and the `similar()` tag filter. `remove()` applies the prefix exactly once, on every driver. With a function prefix, invalidation uses the prefix that is current when it runs, which is the same prefix the tag index itself is read under. The two therefore agree as long as the prefix is stable for a given app or tenant.
+- **Upgrade note:** entries tagged before this upgrade are indexed under the old, already-prefixed form, so invalidation still can't reach them. Their tag index is dropped on the first `invalidate()`, which leaves those entries orphaned. They expire by their TTL, or `flush()` clears them right away.
+
 ## 5.15.0 - 2026-09-18
 
 ### Fixed

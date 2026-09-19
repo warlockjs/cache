@@ -5,6 +5,7 @@ import type {
   CacheTtl,
   TaggedCacheDriver,
 } from "./types";
+import { parseCacheKey } from "./utils";
 
 /**
  * Tagged Cache Wrapper
@@ -39,7 +40,7 @@ export class TaggedCache implements TaggedCacheDriver {
   /**
    * Store tag-key relationship
    */
-  protected async storeTaggedKey(key: string): Promise<void> {
+  protected async storeTaggedKey(key: CacheKey): Promise<void> {
     await this.storeTagRelationship(key);
   }
 
@@ -47,19 +48,37 @@ export class TaggedCache implements TaggedCacheDriver {
    * Public alias of the tag-index writer. Called by `BaseCacheDriver.applyTags`
    * when tags are passed inline through `CacheSetOptions.tags`.
    *
+   * Takes the caller's key, never the driver-parsed one — see {@link indexedKey}.
+   *
    * @internal — public for cross-class use within this package; not part of the
    * stable consumer API.
    */
-  public async storeTagRelationship(parsedKey: string): Promise<void> {
+  public async storeTagRelationship(key: CacheKey): Promise<void> {
+    const indexedKey = this.indexedKey(key);
+
     for (const tag of this.cacheTags) {
       const tagKey = this.tagKey(tag);
       const keys = (await this.driver.get(tagKey)) || [];
 
-      if (!keys.includes(parsedKey)) {
-        keys.push(parsedKey);
+      if (!keys.includes(indexedKey)) {
+        keys.push(indexedKey);
         await this.driver.set(tagKey, keys, Infinity);
       }
     }
+  }
+
+  /**
+   * The form a key takes inside a tag index: normalized but un-prefixed.
+   *
+   * The index is read back and deleted through `driver.remove(key)`, which
+   * applies `globalPrefix` itself — so the index must hold the key *before*
+   * the prefix, or invalidation would prefix it twice and delete nothing.
+   * With a function prefix, the current prefix is re-applied at invalidation
+   * time; the tag index key is resolved under that same prefix, so the two
+   * agree as long as the prefix is stable for a given request/tenant.
+   */
+  protected indexedKey(key: CacheKey): string {
+    return parseCacheKey(key);
   }
 
   /**
@@ -88,11 +107,9 @@ export class TaggedCache implements TaggedCacheDriver {
     value: any,
     ttlOrOptions?: CacheTtl | CacheSetOptions,
   ): Promise<any> {
-    const parsedKey = this.driver.parseKey(key);
-
     await this.driver.set(key, value, ttlOrOptions);
 
-    await this.storeTaggedKey(parsedKey);
+    await this.storeTaggedKey(key);
 
     return value;
   }
@@ -108,7 +125,7 @@ export class TaggedCache implements TaggedCacheDriver {
    * {@inheritdoc}
    */
   public async remove(key: CacheKey): Promise<void> {
-    const parsedKey = this.driver.parseKey(key);
+    const indexedKey = this.indexedKey(key);
 
     // Remove the value
     await this.driver.remove(key);
@@ -117,7 +134,7 @@ export class TaggedCache implements TaggedCacheDriver {
     for (const tag of this.cacheTags) {
       const tagKey = this.tagKey(tag);
       const keys = (await this.driver.get(tagKey)) || [];
-      const updatedKeys = keys.filter((k: string) => k !== parsedKey);
+      const updatedKeys = keys.filter((k: string) => k !== indexedKey);
       await this.driver.set(tagKey, updatedKeys, Infinity);
     }
   }
@@ -128,7 +145,7 @@ export class TaggedCache implements TaggedCacheDriver {
   public async invalidate(): Promise<void> {
     const keysToRemove = await this.getTaggedKeys();
 
-    // Remove all tagged keys
+    // Remove all tagged keys — indexed un-prefixed, so `remove()` prefixes once
     for (const key of keysToRemove) {
       await this.driver.remove(key);
     }

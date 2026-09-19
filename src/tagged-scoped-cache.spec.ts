@@ -100,6 +100,28 @@ describe("TaggedScopedCache", () => {
     expect(await scope.get("k")).toBeNull();
   });
 
+  it("setNX registers a tag relationship invalidate() can follow under a globalPrefix", async () => {
+    const prefixed = new CacheManager();
+    prefixed.setCacheConfigurations({
+      default: "memory",
+      logging: false,
+      drivers: { memory: SetNxMemoryDriver },
+      options: { memory: { globalPrefix: () => "store" } },
+    });
+    await prefixed.init();
+
+    const scope = prefixed.namespace("s");
+    await scope.set("neighbour", "n");
+
+    expect(await scope.tags(["t"]).setNX("k", "v")).toBe(true);
+
+    await scope.tags(["t"]).invalidate();
+    expect(await scope.get("k")).toBeNull();
+    expect(await scope.get("neighbour")).toBe("n");
+
+    await prefixed.disconnect();
+  });
+
   it("setNX with no tags still sets and skips registration", async () => {
     const scope = cache.namespace("s"); // no scope tags
 

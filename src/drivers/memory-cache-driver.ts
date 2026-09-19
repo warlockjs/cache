@@ -170,7 +170,7 @@ export class MemoryCacheDriver
     }
 
     if (tags && tags.length > 0) {
-      await this.applyTags(parsedKey, tags);
+      await this.applyTags(key, tags);
     }
 
     if (vector) {
