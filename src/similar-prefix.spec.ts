@@ -34,7 +34,7 @@ describe.each([
       const hits = await driver.similar([1, 0, 0], { topK: 10 });
 
       expect(hits.map((h: any) => h.key)).toEqual(["store.doc.a"]);
-      expect(hits[0].value).toEqual({ text: "a" });
+      expect(hits[0]?.value).toEqual({ text: "a" });
     });
   }
 
