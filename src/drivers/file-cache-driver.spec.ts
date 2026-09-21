@@ -352,15 +352,30 @@ describe("FileCacheDriver", () => {
 
       await driver.swr("k", { freshTtl: 1, staleTtl: 600 }, fetcher);
 
-      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1500);
-      value = "v2";
+      let resolveBackgroundWrite!: () => void;
+      const backgroundWrite = new Promise<void>((resolve) => {
+        resolveBackgroundWrite = resolve;
+      });
+      const onSet = () => {
+        driver.off("set", onSet);
+        resolveBackgroundWrite();
+      };
+      driver.on("set", onSet);
 
-      const stale = await driver.swr("k", { freshTtl: 1, staleTtl: 600 }, fetcher);
-      expect(stale).toBe("v1");
-      vi.restoreAllMocks();
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1500);
 
-      // Background refresh shares one in-flight promise; let it settle.
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      try {
+        value = "v2";
+
+        const stale = await driver.swr("k", { freshTtl: 1, staleTtl: 600 }, fetcher);
+        expect(stale).toBe("v1");
+
+        // The file driver emits `set` after its background write completes.
+        await backgroundWrite;
+      } finally {
+        nowSpy.mockRestore();
+        driver.off("set", onSet);
+      }
 
       const refreshed = await driver.swr("k", { freshTtl: 1, staleTtl: 600 }, fetcher);
       expect(refreshed).toBe("v2");
