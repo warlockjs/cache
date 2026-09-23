@@ -1,6 +1,6 @@
 ---
 name: pick-cache-driver
-description: 'Pick a cache driver — null / memory / memoryExtended / lru / file / redis / pg / mock — and configure it. Triggers: `cache.setCacheConfigurations`, `BaseCacheDriver`, `cache.use`, `cache.load`, `cache.driver`, `globalPrefix`; "which cache driver should I use", "configure redis driver", "register custom cache driver", "multi-tenant scoping"; typical import `import { cache, BaseCacheDriver } from "@warlock.js/cache"`. Skip: cache CRUD — `@warlock.js/cache/cache-basics/SKILL.md`; pg setup — `@warlock.js/cache/configure-pg-cache/SKILL.md`; competing libs `lru-cache`, `node-cache`, `keyv`, `ioredis`; native `Map`.'
+description: "Cache drivers — pick the right one in @warlock.js/cache; use when you need to choose cache driver."
 ---
 
 # Cache drivers — pick the right one

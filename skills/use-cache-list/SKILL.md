@@ -1,6 +1,6 @@
 ---
 name: use-cache-list
-description: 'Ordered collections via cache.list<T>(key) — push / unshift / pop / shift / slice / all / length / trim / clear. Triggers: `cache.list`, `push`, `unshift`, `pop`, `shift`, `slice`, `trim`, `clear`; "job queue in cache", "keep most recent N events", "audit log buffer", "FIFO queue"; typical import `import { cache } from "@warlock.js/cache"`. Skip: locking around list writes — `@warlock.js/cache/use-cache-lock/SKILL.md`; competing libs `bullmq`, `bee-queue`, `bull`, `ioredis` `LPUSH`; native `Array.push`.'
+description: "Lists — the cache.list<T>(key) sub-API in @warlock.js/cache; use when you need to use cache list."
 ---
 
 # Lists — the `cache.list<T>(key)` sub-API

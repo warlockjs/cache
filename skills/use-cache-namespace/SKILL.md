@@ -1,6 +1,6 @@
 ---
 name: use-cache-namespace
-description: 'Scope cache keys via cache.namespace(prefix, options?) — every key auto-prefixed, scope-level ttl / tags defaults, nested scopes, .clear() sugar. Triggers: `cache.namespace`, `cache.removeNamespace`, `clear`, `globalPrefix`; "scope cache keys under a prefix", "share TTL across a whole prefix", "drop every key under user.1", "nested cache scopes"; typical import `import { cache } from "@warlock.js/cache"`. Skip: tag-based bulk drop — `@warlock.js/cache/use-cache-tags/SKILL.md`; multi-tenant driver-level prefix — `@warlock.js/cache/pick-cache-driver/SKILL.md`; SWR — `@warlock.js/cache/use-swr/SKILL.md`; competing libs `keyv` namespaces.'
+description: "Scoped caches — cache.namespace(prefix, options?) in @warlock.js/cache; use when you need to use cache namespace."
 ---
 
 # Scoped caches — `cache.namespace(prefix, options?)`

@@ -1,6 +1,6 @@
 ---
 name: apply-cache-patterns
-description: 'Compose cache primitives into real-world patterns — remember() memoization, cross-node stampede protection via a distributed lock (onConflict: ''create''), negative caching, and per-tenant scoping. Triggers: `cache.remember`, `cache.set` with `onConflict: "create"`, `globalPrefix`; "memoize this function", "prevent cache stampede across nodes", "cache not-found results", "per-tenant cache scoping"; typical import `import { cache } from "@warlock.js/cache"`. Skip: counters — `@warlock.js/cache/use-cache-atomic/SKILL.md`; bulk get/set — `@warlock.js/cache/use-cache-bulk/SKILL.md`; TTL constants/utilities — `@warlock.js/cache/use-cache-utils/SKILL.md`; named lock wrapper — `@warlock.js/cache/use-cache-lock/SKILL.md`; SWR — `@warlock.js/cache/use-swr/SKILL.md`; competing libs `lru-cache`, `node-cache`, `keyv`.'
+description: "Real-world caching patterns in @warlock.js/cache; use when you need to apply cache patterns."
 ---
 
 # Real-world caching patterns

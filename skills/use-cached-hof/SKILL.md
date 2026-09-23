@@ -1,6 +1,6 @@
 ---
 name: use-cached-hof
-description: 'Wrap an async function with cached(fn, options) — declare the caching strategy once, call from many sites, get a bound .invalidate(...args) helper. Triggers: `cached`, `invalidate`, `key`, `ttl`, `tags`, `driver`; "wrap a DB lookup with caching", "memoize a function and invalidate by args", "one declaration many call sites", "auto-derive cache key from args"; typical import `import { cached } from "@warlock.js/cache"`. Skip: one-shot memoization — `@warlock.js/cache/apply-cache-patterns/SKILL.md` (`cache.remember`); tag bulk drop — `@warlock.js/cache/use-cache-tags/SKILL.md`; competing libs `p-memoize`, `mem`, `lodash.memoize`.'
+description: "cached() — function-memoization wrapper in @warlock.js/cache; use when you need to use cached hof."
 ---
 
 # `cached()` — function-memoization wrapper

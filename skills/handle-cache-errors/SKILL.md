@@ -1,6 +1,6 @@
 ---
 name: handle-cache-errors
-description: 'Cache error classes — CacheError base, CacheConfigurationError, CacheConnectionError, CacheDriverNotInitializedError, CacheUnsupportedError, CacheConcurrencyError. Triggers: `CacheError`, `CacheConfigurationError`, `CacheConnectionError`, `CacheDriverNotInitializedError`, `CacheUnsupportedError`, `CacheConcurrencyError`; "catch cache errors at the boundary", "degrade when update or merge throws", "what does CacheUnsupportedError mean", "fall back when redis is down"; typical import `import { CacheError, CacheConfigurationError, CacheUnsupportedError } from "@warlock.js/cache"`. Skip: choosing a supported driver — `@warlock.js/cache/pick-cache-driver/SKILL.md`; observing errors via events — `@warlock.js/cache/observe-cache/SKILL.md`; competing libs ignore — generic `Error` patterns.'
+description: "Error classes in @warlock.js/cache; use when you need to handle cache errors."
 ---
 
 # Error classes

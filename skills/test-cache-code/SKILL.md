@@ -1,6 +1,6 @@
 ---
 name: test-cache-code
-description: 'Test code that touches cache — MockCacheDriver (behavioral assertions with wasCalled / callLog), MemoryCacheDriver (full-stack), NullCacheDriver (graceful-degradation). Triggers: `MockCacheDriver`, `MemoryCacheDriver`, `NullCacheDriver`, `wasCalled`, `callLog`, `getStored`, `reset`, `cache.on`; "assert cache was invalidated", "test code that uses cache.set", "mock cache in vitest", "test similarity without a real embedder", "stub the pg cache driver"; typical import `import { cache, MockCacheDriver, MemoryCacheDriver } from "@warlock.js/cache"`. Skip: real driver picks — `@warlock.js/cache/pick-cache-driver/SKILL.md`; competing libs `jest-mock`, `sinon`, `redis-mock`; native `vi.fn`.'
+description: "Testing code that touches cache in @warlock.js/cache; use when you need to test cache code."
 ---
 
 # Testing code that touches cache

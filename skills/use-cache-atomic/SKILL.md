@@ -1,6 +1,6 @@
 ---
 name: use-cache-atomic
-description: 'Atomic counters via cache.increment(key, by=1) / cache.decrement(key, by=1) — returns the new number, throws on non-numeric values. Triggers: `cache.increment`, `cache.decrement`, "view counter", "page views", "atomic counter", "decrement stock", "rate-limit counter", "INCRBY"; typical import `import { cache } from "@warlock.js/cache"`. Skip: read-modify-write of objects — `@warlock.js/cache/use-cache-update-merge/SKILL.md`; named-lock coordination — `@warlock.js/cache/use-cache-lock/SKILL.md`; competing libs `ioredis` `INCR`, native counters in a `Map`.'
+description: "Atomic counters — cache.increment / cache.decrement in @warlock.js/cache; use when you need to use cache atomic."
 ---
 
 # Atomic counters — `cache.increment` / `cache.decrement`

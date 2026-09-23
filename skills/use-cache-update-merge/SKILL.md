@@ -1,6 +1,6 @@
 ---
 name: use-cache-update-merge
-description: 'Atomic read-modify-write via cache.update(key, fn) (callback receives current) or cache.merge(key, partial) (shallow merge). Per-key chain lock serializes concurrent in-process callers. Triggers: `cache.update`, `cache.merge`, `cache.increment`, `cache.pull`; "atomically update a cached counter", "change one field on a cached object", "avoid get-spread-set race", "serialize concurrent cache writers"; typical import `import { cache } from "@warlock.js/cache"`. Skip: cross-process locking — `@warlock.js/cache/use-cache-lock/SKILL.md`; conditional create/update — `@warlock.js/cache/configure-set-options/SKILL.md`; competing libs `lodash.merge`, raw redis `WATCH`/`MULTI`.'
+description: "update and merge — atomic read-modify-write in @warlock.js/cache; use when you need to use cache update merge."
 ---
 
 # `update` and `merge` — atomic read-modify-write

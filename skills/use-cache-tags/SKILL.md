@@ -1,6 +1,6 @@
 ---
 name: use-cache-tags
-description: 'Tag-based invalidation — attach tags on write, then cache.tags([...]).invalidate() drops every key bound to any of those tags. Triggers: `cache.tags`, `invalidate`, `cache.set` with `tags`; "invalidate every key tagged users", "drop everything for tenant 42", "bulk cache invalidation without knowing keys", "tag a cached value"; typical import `import { cache } from "@warlock.js/cache"`. Skip: prefix-based drop — `@warlock.js/cache/use-cache-namespace/SKILL.md`; HOF memoization with tags — `@warlock.js/cache/use-cached-hof/SKILL.md`; SWR — `@warlock.js/cache/use-swr/SKILL.md`; competing libs `cache-manager` tags, Next.js `revalidateTag`.'
+description: "Tag-based invalidation in @warlock.js/cache; use when you need to use cache tags."
 ---
 
 # Tag-based invalidation

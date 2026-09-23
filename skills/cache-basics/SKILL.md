@@ -1,6 +1,6 @@
 ---
 name: cache-basics
-description: 'Start with @warlock.js/cache — the cache singleton, primary ops (set / get / pull / remove / many / forever / increment / remember), TTL shapes, init flow. Triggers: `cache`, `cache.setCacheConfigurations`, `cache.init`, `cache.set`, `cache.get`, `cache.remove`, `cache.remember`, `cache.flush`; "start with warlock cache", "wire up cache at startup", "which cache skill do I need"; typical import `import { cache } from "@warlock.js/cache"`. Skip: driver choice — `@warlock.js/cache/pick-cache-driver/SKILL.md`; set options — `@warlock.js/cache/configure-set-options/SKILL.md`; competing libs `lru-cache`, `node-cache`, `keyv`; native `Map`.'
+description: "Start here for @warlock.js/cache drivers, key-value operations, and application cache configuration."
 ---
 
 # Cache basics

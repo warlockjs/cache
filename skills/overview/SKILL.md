@@ -1,6 +1,6 @@
 ---
 name: overview
-description: 'Front-door orientation for `@warlock.js/cache` — multi-driver caching (memory / memoryExtended / lru / file / redis / pg / null / mock) with a single `cache` API: get/set/has/pull/remember, TTL shapes, tag-based invalidation, key namespaces, distributed locks, stale-while-revalidate, atomic update/merge, cache lists, vector similarity, metrics + events, and the `cached()` HOF. TRIGGER when: code imports from `@warlock.js/cache` (`cache`, `cached`, `setCacheConfigurations`, a `*CacheDriver`); user asks "what does @warlock.js/cache do", "which cache driver", "cache TTL / tags / invalidation", "distributed lock", "stale-while-revalidate", "semantic / vector cache", "compare with node-cache / keyv / cache-manager"; package.json adds `@warlock.js/cache`. Skip: specific task already known — load the matching task skill directly (`cache-basics`, `pick-cache-driver`, `configure-set-options`, `use-cache-tags`, `use-cache-namespace`, `use-cache-list`, `use-cache-lock`, `use-swr`, `use-cached-hof`, `use-cache-similarity`, `use-cache-update-merge`, `use-cache-atomic`, `use-cache-bulk`, `use-cache-utils`, `apply-cache-patterns`, `observe-cache`, `handle-cache-errors`, `configure-pg-cache`, `test-cache-code`).'
+description: "@warlock.js/cache overview for orientation and choosing the focused skill for the task."
 ---
 
 # `@warlock.js/cache` — overview
