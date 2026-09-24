@@ -319,6 +319,32 @@ describe("CacheManager", () => {
       expect(first).toBe(second);
     });
 
+    it("concurrent load() calls share one connect()", async () => {
+      const connect = vi.spyOn(MemoryCacheDriver.prototype, "connect");
+      manager.setCacheConfigurations({
+        drivers: { x: MemoryCacheDriver },
+        options: { x: {} },
+      } as any);
+      const [a, b] = await Promise.all([manager.load("x"), manager.load("x")]);
+      expect(a).toBe(b);
+      expect(connect).toHaveBeenCalledTimes(1);
+      connect.mockRestore();
+    });
+
+    it("disconnect() closes every loaded driver", async () => {
+      manager.setCacheConfigurations({
+        drivers: { a: MemoryCacheDriver, b: MemoryCacheDriver },
+        options: { a: {}, b: {} },
+      } as any);
+      const a = await manager.load("a");
+      const b = await manager.load("b");
+      const spyA = vi.spyOn(a, "disconnect");
+      const spyB = vi.spyOn(b, "disconnect");
+      await manager.disconnect();
+      expect(spyA).toHaveBeenCalledTimes(1);
+      expect(spyB).toHaveBeenCalledTimes(1);
+    });
+
     it("use(driverInstance) accepts an existing driver", async () => {
       const nullDriver = new NullCacheDriver();
       await manager.use(nullDriver);

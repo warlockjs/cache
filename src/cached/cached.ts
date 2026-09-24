@@ -83,6 +83,11 @@ export function cached<Args extends unknown[], R>(
 
   wrapper.invalidate = async (...args: Args): Promise<void> => {
     const key = config.key(...args);
+    if (config.driver) {
+      await (await cache.driver(config.driver)).remove(key);
+      return;
+    }
+
     await cache.remove(key);
   };
 

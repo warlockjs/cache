@@ -22,7 +22,8 @@ describe("MemoryExtendedCacheDriver", () => {
     await driver.set("k", "v", 10);
 
     const entry = driver.data["k"];
-    const firstExpiresAt = entry.expiresAt;
+    expect(entry.expiresAt).toBeTypeOf("number");
+    const firstExpiresAt = entry.expiresAt as number;
 
     vi.spyOn(Date, "now").mockReturnValue(firstExpiresAt - 5000);
 
@@ -30,6 +31,29 @@ describe("MemoryExtendedCacheDriver", () => {
 
     expect(entry.expiresAt).toBeGreaterThan(firstExpiresAt - 5000);
     expect(entry.expiresAt).toBeGreaterThanOrEqual(firstExpiresAt);
+    vi.restoreAllMocks();
+  });
+
+  it("does not resurrect an expired entry when reading", async () => {
+    await driver.set("k", "v", 10);
+    const entry = driver.data["k"];
+
+    vi.spyOn(Date, "now").mockReturnValue(entry.expiresAt! + 1000);
+
+    await expect(driver.get("k")).resolves.toBeNull();
+    expect(driver.data["k"]).toBeUndefined();
+    vi.restoreAllMocks();
+  });
+
+  it("does not slide the ttl on the onConflict existence check", async () => {
+    await driver.set("k", "v", 10);
+    const entry = driver.data["k"];
+    const before = entry.expiresAt;
+
+    vi.spyOn(Date, "now").mockReturnValue(before! - 5000);
+    await driver.set("k", "other", { ttl: 10, onConflict: "create" });
+
+    expect(entry.expiresAt).toBe(before);
     vi.restoreAllMocks();
   });
 

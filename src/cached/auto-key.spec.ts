@@ -7,49 +7,42 @@ describe("deriveAutoKey", () => {
     expect(deriveAutoKey("featured", [])).toBe("featured");
   });
 
-  it("concatenates a single primitive arg", () => {
-    expect(deriveAutoKey("user", [42])).toBe("user.42");
-    expect(deriveAutoKey("user", ["john"])).toBe("user.john");
-    expect(deriveAutoKey("flag", [true])).toBe("flag.true");
+  it("produces <prefix>.<16 hex> for args", () => {
+    expect(deriveAutoKey("user", [42])).toMatch(/^user\.[0-9a-f]{16}$/);
   });
 
-  it("joins multiple primitive args with dots — order preserved", () => {
-    expect(deriveAutoKey("orders", [42, "abc"])).toBe("orders.42.abc");
-    expect(deriveAutoKey("orders", ["abc", 42])).toBe("orders.abc.42");
+  it("is deterministic and order-sensitive for positional args", () => {
+    expect(deriveAutoKey("o", [42, "abc"])).toBe(deriveAutoKey("o", [42, "abc"]));
+    expect(deriveAutoKey("o", [42, "abc"])).not.toBe(deriveAutoKey("o", ["abc", 42]));
   });
 
-  it("renders null and undefined as literal strings", () => {
-    expect(deriveAutoKey("user", [null])).toBe("user.null");
-    expect(deriveAutoKey("user", [undefined])).toBe("user.undefined");
-    expect(deriveAutoKey("user", ["john", null])).toBe("user.john.null");
+  it("does not merge argument lists that differ only by punctuation", () => {
+    expect(deriveAutoKey("k", ["1.private", ""])).not.toBe(deriveAutoKey("k", ["1", "private"]));
   });
 
-  it("renders bigint via toString", () => {
-    expect(deriveAutoKey("big", [1n])).toBe("big.1");
-    expect(deriveAutoKey("big", [9007199254740993n])).toBe("big.9007199254740993");
+  it("distinguishes types (1 vs '1', null vs undefined, bigint vs number)", () => {
+    const keys = [[1], ["1"], [null], [undefined], [1n]].map((a) => deriveAutoKey("k", a));
+    expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("falls back to JSON.stringify when any arg is an object", () => {
-    expect(deriveAutoKey("search", [{ q: "hello" }])).toBe(
-      'search.[{"q":"hello"}]',
-    );
+  it("ignores object key order", () => {
+    expect(deriveAutoKey("s", [{ a: 1, b: 2 }])).toBe(deriveAutoKey("s", [{ b: 2, a: 1 }]));
   });
 
-  it("falls back to JSON.stringify when any arg is an array", () => {
-    expect(deriveAutoKey("tags", [["a", "b"]])).toBe('tags.[["a","b"]]');
+  it("encodes Date as ISO string", () => {
+    const iso = "2026-04-24T00:00:00.000Z";
+    expect(deriveAutoKey("t", [new Date(iso)])).toBe(deriveAutoKey("t", [iso]));
   });
 
-  it("falls back to JSON.stringify when mixed primitive and object args", () => {
-    expect(deriveAutoKey("user", [42, { scope: "admin" }])).toBe(
-      'user.[42,{"scope":"admin"}]',
-    );
+  it("supports nested bigint", () => {
+    expect(() => deriveAutoKey("k", [{ id: 1n }])).not.toThrow();
   });
 
-  it("serializes Date via JSON.stringify as an ISO string", () => {
-    const date = new Date("2026-04-24T00:00:00.000Z");
-    expect(deriveAutoKey("t", [date])).toBe(
-      't.["2026-04-24T00:00:00.000Z"]',
-    );
+  it("throws for Map, Set, functions, symbols and class instances", () => {
+    class Foo {}
+    for (const arg of [new Map(), new Set(), () => 1, Symbol("x"), new Foo()]) {
+      expect(() => deriveAutoKey("bad", [arg])).toThrow(CacheConfigurationError);
+    }
   });
 
   it("throws CacheConfigurationError on circular references", () => {
@@ -57,9 +50,5 @@ describe("deriveAutoKey", () => {
     circular.self = circular;
 
     expect(() => deriveAutoKey("bad", [circular])).toThrow(CacheConfigurationError);
-  });
-
-  it("throws CacheConfigurationError on bigint nested inside an object", () => {
-    expect(() => deriveAutoKey("bad", [{ id: 1n }])).toThrow(CacheConfigurationError);
   });
 });

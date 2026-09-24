@@ -6,6 +6,7 @@ import type {
   CacheSetOptions,
   CacheTtl,
   NullCacheDriverOptions,
+  RememberOptions,
 } from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
 
@@ -54,8 +55,22 @@ export class NullCacheDriver
   /**
    * {@inheritdoc}
    */
-  public parseKey(_key: CacheKey) {
-    return "";
+  public parseKey(key: CacheKey) {
+    // Real parsed key so the base lock map never merges distinct keys.
+    return super.parseKey(key);
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Nothing is stored, so always run the callback and return its own result.
+   */
+  public async remember(
+    _key: CacheKey,
+    _ttlOrOptions: CacheTtl | RememberOptions,
+    callback: () => Promise<any>,
+  ): Promise<any> {
+    return callback();
   }
 
   /**

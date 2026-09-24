@@ -180,15 +180,41 @@ export class PgCacheDriver
   }
 
   /**
-   * Compute an absolute `expires_at` Date for the given relative TTL in seconds,
-   * or `null` when the entry should not expire (`Infinity` / 0 / undefined).
+   * TTL in seconds bound to `now() + make_interval(secs => $n)`, so expiry is
+   * computed on the DB clock (immune to app/DB clock skew). `null` — from
+   * `Infinity` / 0 / undefined — yields a NULL `expires_at` (never expires).
    */
-  protected ttlToExpiresAt(ttl?: number): Date | null {
+  protected ttlToSeconds(ttl?: number): number | null {
     if (!ttl || ttl === Infinity) {
       return null;
     }
 
-    return new Date(Date.now() + ttl * 1000);
+    return ttl;
+  }
+
+  /**
+   * Delete expired rows in batches of `limit`. Returns how many were removed.
+   * Also invoked opportunistically (~1 in 200 writes) by `set()`.
+   */
+  public async prune(limit = 1000): Promise<number> {
+    const t = this.table;
+    const res = await this.pgClient.query(
+      `DELETE FROM ${t} WHERE ctid IN (SELECT ctid FROM ${t} WHERE expires_at < now() LIMIT $1)`,
+      [limit],
+    );
+
+    return res.rowCount ?? 0;
+  }
+
+  /**
+   * Fire-and-forget `prune()` on roughly 1 in 200 writes; errors are logged.
+   */
+  protected maybePrune(): void {
+    if (Math.random() >= 1 / 200) {
+      return;
+    }
+
+    this.prune().catch(error => this.logError("prune failed", error));
   }
 
   /**
@@ -285,7 +311,7 @@ export class PgCacheDriver
 
     this.log("caching", parsedKey);
 
-    const expiresAt = this.ttlToExpiresAt(ttl);
+    const expiresAt = this.ttlToSeconds(ttl);
     const staleAtDate = staleAt !== undefined ? new Date(staleAt) : null;
     const tagsArr = tags ?? [];
     const serialized = JSON.stringify(value);
@@ -295,10 +321,16 @@ export class PgCacheDriver
 
     // Build column / placeholder / param triplets dynamically so the same code
     // path serves both KV-only and vector-aware writes. Param order is fixed:
-    //   $1 = key, $2 = value (jsonb), $3 = expires_at, $4 = stale_at,
+    //   $1 = key, $2 = value (jsonb), $3 = ttl seconds (expires_at = now() + make_interval), $4 = stale_at,
     //   $5 = tags, $6 = embedding::vector (only present when vecLiteral !== null).
     const cols = ["key", "value", "expires_at", "stale_at", "tags"];
-    const placeholders = ["$1", "$2::jsonb", "$3", "$4", "$5"];
+    const placeholders = [
+      "$1",
+      "$2::jsonb",
+      "now() + make_interval(secs => $3::double precision)",
+      "$4",
+      "$5",
+    ];
     const params: unknown[] = [parsedKey, serialized, expiresAt, staleAtDate, tagsArr];
     if (vecLiteral !== null) {
       cols.push("embedding");
@@ -340,6 +372,7 @@ export class PgCacheDriver
       }
 
       this.log("cached", parsedKey);
+      this.maybePrune();
       await this.emit("set", { key: parsedKey, value, ttl });
       return { wasSet: true, existing: null } satisfies CacheSetResult;
     }
@@ -363,6 +396,7 @@ export class PgCacheDriver
       }
 
       this.log("cached", parsedKey);
+      this.maybePrune();
       await this.emit("set", { key: parsedKey, value, ttl });
       return { wasSet: true, existing: null } satisfies CacheSetResult;
     }
@@ -381,6 +415,7 @@ export class PgCacheDriver
     }
 
     this.log("cached", parsedKey);
+    this.maybePrune();
     await this.emit("set", { key: parsedKey, value, ttl });
     return value;
   }

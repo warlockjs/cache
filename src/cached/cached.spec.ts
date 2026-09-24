@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cache } from "../cache-manager";
 import { MemoryCacheDriver } from "../drivers/memory-cache-driver";
 import type { DriverClass } from "../types";
+import { deriveAutoKey } from "./auto-key";
 import { cached } from "./cached";
 
 describe("cached()", () => {
@@ -46,8 +47,8 @@ describe("cached()", () => {
       await getUser(1);
 
       expect(source).toHaveBeenCalledTimes(2);
-      await expect(cache.get("user.1")).resolves.toEqual({ id: 1, name: "user-1" });
-      await expect(cache.get("user.2")).resolves.toEqual({ id: 2, name: "user-2" });
+      await expect(cache.get(deriveAutoKey("user", [1]))).resolves.toEqual({ id: 1, name: "user-1" });
+      await expect(cache.get(deriveAutoKey("user", [2]))).resolves.toEqual({ id: 2, name: "user-2" });
     });
   });
 
@@ -163,6 +164,31 @@ describe("cached()", () => {
     });
   });
 
+  describe("auto-key safety", () => {
+    it("keeps ('1.private','') and ('1','private') separate", async () => {
+      const source = vi.fn(async (a: string, b: string) => `${a}|${b}`);
+      const fn = cached(source, "k");
+
+      await expect(fn("1.private", "")).resolves.toBe("1.private|");
+      await expect(fn("1", "private")).resolves.toBe("1|private");
+      expect(source).toHaveBeenCalledTimes(2);
+    });
+
+    it("treats {a,b} and {b,a} as the same key", async () => {
+      const source = vi.fn(async (_o: object) => 1);
+      const fn = cached(source, "k");
+
+      await fn({ a: 1, b: 2 });
+      await fn({ b: 2, a: 1 });
+      expect(source).toHaveBeenCalledTimes(1);
+    });
+
+    it("throws for a Map arg", async () => {
+      const fn = cached(async (_m: Map<string, string>) => 1, "k");
+      await expect(fn(new Map())).rejects.toThrow();
+    });
+  });
+
   describe("invalidate()", () => {
     it("drops the exact entry for the given args and leaves siblings alone", async () => {
       const source = vi.fn(async (id: number) => ({ id }));
@@ -173,8 +199,19 @@ describe("cached()", () => {
 
       await getUser.invalidate(1);
 
-      await expect(cache.get("user.1")).resolves.toBeNull();
-      await expect(cache.get("user.2")).resolves.toEqual({ id: 2 });
+      await expect(cache.get(deriveAutoKey("user", [1]))).resolves.toBeNull();
+      await expect(cache.get(deriveAutoKey("user", [2]))).resolves.toEqual({ id: 2 });
+    });
+
+    it("removes from the configured driver", async () => {
+      const fn = cached(async (id: number) => ({ id }), { key: (id) => `u.${id}`, driver: "alt" });
+      const alt = await cache.driver("alt");
+
+      await fn(1);
+      await expect(alt.get("u.1")).resolves.toEqual({ id: 1 });
+
+      await fn.invalidate(1);
+      await expect(alt.get("u.1")).resolves.toBeNull();
     });
 
     it("is a no-op when the entry doesn't exist", async () => {

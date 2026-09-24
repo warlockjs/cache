@@ -35,6 +35,11 @@ export class CacheManager implements CacheDriver<any, any> {
   public loadedDrivers: Record<string, CacheDriver<any, any>> = {};
 
   /**
+   * In-flight `load()` promises, so concurrent callers share one `connect()`.
+   */
+  protected loadingDrivers = new Map<string, Promise<CacheDriver<any, any>>>();
+
+  /**
    * Configurations list
    */
   protected configurations: CacheConfigurations = {
@@ -349,6 +354,14 @@ export class CacheManager implements CacheDriver<any, any> {
       return this.loadedDrivers[driver];
     }
 
+    const inFlight = this.loadingDrivers.get(driver);
+
+    if (inFlight) {
+      this.assertNoConflictingReload(driver, runtimeOptions);
+
+      return inFlight;
+    }
+
     const Driver = this.configurations.drivers[
       driver as keyof typeof this.configurations.drivers
     ] as DriverClass | undefined;
@@ -365,13 +378,23 @@ export class CacheManager implements CacheDriver<any, any> {
 
     driverInstance.setOptions({ ...configOptions, ...(runtimeOptions ?? {}) });
 
-    await driverInstance.connect();
+    const promise = (async () => {
+      try {
+        await driverInstance.connect();
 
-    this.attachGlobalListeners(driverInstance);
+        this.attachGlobalListeners(driverInstance);
 
-    this.loadedDrivers[driver] = driverInstance;
+        this.loadedDrivers[driver] = driverInstance;
 
-    return driverInstance as CacheDriver<any, any>;
+        return driverInstance as CacheDriver<any, any>;
+      } finally {
+        this.loadingDrivers.delete(driver);
+      }
+    })();
+
+    this.loadingDrivers.set(driver, promise);
+
+    return promise;
   }
 
   /**
@@ -409,9 +432,19 @@ export class CacheManager implements CacheDriver<any, any> {
    * Disconnect the cache manager
    */
   public async disconnect() {
+    const drivers = new Set<any>(Object.values(this.loadedDrivers));
+
     if (this.currentDriver) {
-      await this.currentDriver.disconnect();
+      drivers.add(this.currentDriver);
     }
+
+    await Promise.allSettled([...drivers].map(driver => driver.disconnect()));
+
+    for (const name of Object.keys(this.loadedDrivers)) {
+      delete this.loadedDrivers[name];
+    }
+
+    this.loadingDrivers.clear();
   }
 
   /**

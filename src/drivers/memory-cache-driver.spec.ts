@@ -341,6 +341,62 @@ describe("MemoryCacheDriver", () => {
     });
   });
 
+  describe("flat storage, atomic conditional set, clone", () => {
+    it("Promise.all of two lock() calls acquires exactly one", async () => {
+      const gate = new Promise((r) => setTimeout(r, 20));
+      const results = await Promise.all([
+        driver.lock("job", 5, async () => gate),
+        driver.lock("job", 5, async () => gate),
+      ]);
+
+      expect(results.filter((r) => r.acquired)).toHaveLength(1);
+    });
+
+    it("maxSize: 2 with dotted keys evicts exactly one", async () => {
+      driver.setOptions({ maxSize: 2 });
+      await driver.set("users.1", 1);
+      await driver.set("users.2", 2);
+      await driver.set("users.3", 3);
+
+      const present: string[] = [];
+      for (const k of ["users.1", "users.2", "users.3"]) {
+        if ((await driver.get(k)) !== null) present.push(k);
+      }
+
+      expect(present).toEqual(["users.2", "users.3"]);
+    });
+
+    it("get of a parent key after setting a child is a miss", async () => {
+      await driver.set("users.1", "a");
+      await expect(driver.get("users")).resolves.toBeNull();
+    });
+
+    it("mutating the object after set does not change the cache", async () => {
+      const obj = { n: 1 };
+      await driver.set("o", obj);
+      obj.n = 2;
+
+      await expect(driver.get("o")).resolves.toEqual({ n: 1 });
+    });
+
+    it("an Infinity write after a ttl write is not swept", async () => {
+      vi.useFakeTimers();
+      const temp = new MemoryCacheDriver();
+      temp.setOptions({});
+      temp.setLoggingState(false);
+
+      await temp.set("k", "v", 1);
+      await temp.set("k", "v2", Infinity);
+
+      await vi.advanceTimersByTimeAsync(5000);
+
+      await expect(temp.get("k")).resolves.toBe("v2");
+
+      await temp.disconnect();
+      vi.useRealTimers();
+    });
+  });
+
   describe("tags", () => {
     it("returns a tagged cache instance", () => {
       const tagged = driver.tags(["users"]);

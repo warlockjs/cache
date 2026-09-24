@@ -101,6 +101,32 @@ describe("parseTtl", () => {
   it("rejects non-string non-number input", () => {
     expect(() => parseTtl({} as never)).toThrow(CacheConfigurationError);
   });
+
+  it("rounds sub-second durations up", () => {
+    expect(parseTtl("500ms")).toBe(1);
+    expect(parseTtl("0ms")).toBe(0);
+    expect(parseTtl("0s")).toBe(0);
+  });
+
+  it("treats bare numeric strings as seconds, trimmed", () => {
+    expect(parseTtl("3600")).toBe(3600);
+    expect(parseTtl(" 60 ")).toBe(60);
+  });
+
+  it("rounds fractional numbers up", () => {
+    expect(parseTtl(0.5)).toBe(1);
+  });
+
+  it("rejects NaN and negatives", () => {
+    expect(() => parseTtl(NaN)).toThrow(CacheConfigurationError);
+    expect(() => parseTtl(-1)).toThrow(CacheConfigurationError);
+    expect(() => parseTtl("abc")).toThrow(CacheConfigurationError);
+  });
+
+  it("keeps Infinity and parses 1h", () => {
+    expect(parseTtl(Infinity)).toBe(Infinity);
+    expect(parseTtl("1h")).toBe(3600);
+  });
 });
 
 describe("CACHE_FOR enum", () => {

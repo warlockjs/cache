@@ -22,6 +22,41 @@ describe("FileCacheDriver", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("create is exclusive under concurrency", async () => {
+    const results = await Promise.all(
+      Array.from({ length: 8 }, (_, i) => driver.set("lock.k", i, { onConflict: "create" })),
+    );
+
+    expect(results.filter((r) => r.wasSet).length).toBe(1);
+  });
+
+  it("keeps a corrupt file in place and returns null", async () => {
+    await driver.set("bad", "v");
+    const file = resolve(directory, "bad", "cache.json");
+    writeFileSync(file, "{not json");
+
+    await expect(driver.get("bad")).resolves.toBeNull();
+    expect(existsSync(file)).toBe(true);
+  });
+
+  it("throws on an empty key", async () => {
+    await expect(driver.remove("{}")).rejects.toThrow(CacheConfigurationError);
+    expect(existsSync(directory)).toBe(true);
+  });
+
+  it("does not let an expired entry block create", async () => {
+    await driver.set("exp", "old", 1);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5000);
+
+    try {
+      const result = await driver.set("exp", "new", { onConflict: "create" });
+      expect(result.wasSet).toBe(true);
+      await expect(driver.get("exp")).resolves.toBe("new");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("throws when no directory option is provided", () => {
     const fresh = new FileCacheDriver();
     expect(() => fresh.setOptions({} as never)).toThrow(CacheConfigurationError);

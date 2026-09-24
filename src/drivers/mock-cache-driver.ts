@@ -131,22 +131,30 @@ export class MockCacheDriver
     this.recordCall("set", parsedKey, [value, ttlOrOptions]);
     this.log("caching", parsedKey);
 
-    const existing = onConflict === "upsert" ? null : await this.get(key);
-    const exists = existing !== null;
+    // Synchronous check + write (no await between) so onConflict is atomic.
+    // Expired entries count as missing and are deleted.
+    let existing = onConflict === "create" || onConflict === "update"
+      ? this.storage.get(parsedKey)
+      : undefined;
 
-    if (onConflict === "create" && exists) {
-      const result: CacheSetResult = { wasSet: false, existing };
+    if (existing && existing.expiresAt !== undefined && existing.expiresAt <= Date.now()) {
+      this.storage.delete(parsedKey);
+      existing = undefined;
+    }
+
+    if (onConflict === "create" && existing) {
+      const result: CacheSetResult = { wasSet: false, existing: this.cloneValue(existing.data) };
 
       return result;
     }
 
-    if (onConflict === "update" && !exists) {
+    if (onConflict === "update" && !existing) {
       const result: CacheSetResult = { wasSet: false, existing: null };
 
       return result;
     }
 
-    const data = this.prepareDataForStorage(value, ttl, staleAt);
+    const data = this.prepareDataForStorage(this.cloneValue(value), ttl, staleAt);
     this.storage.set(parsedKey, data);
 
     if (tags && tags.length > 0) {
@@ -162,7 +170,18 @@ export class MockCacheDriver
       return result;
     }
 
-    return value;
+    return this;
+  }
+
+  /**
+   * Clone non-primitive values so stored state can't be mutated by callers.
+   */
+  protected cloneValue<T>(value: T): T {
+    if (value === null || value === undefined || typeof value !== "object") {
+      return value;
+    }
+
+    return structuredClone(value);
   }
 
   /**
@@ -216,7 +235,7 @@ export class MockCacheDriver
       return null;
     }
 
-    return entry;
+    return { ...entry, data: this.cloneValue(entry.data) };
   }
 
   /**

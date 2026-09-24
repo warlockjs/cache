@@ -1,5 +1,3 @@
-import type { GenericObject } from "@mongez/reinforcements";
-import { get, set, unset } from "@mongez/reinforcements";
 import type {
   CacheData,
   CacheDriver,
@@ -11,8 +9,26 @@ import type {
   CacheTtl,
   MemoryCacheOptions,
 } from "../types";
-import { cosineSimilarity } from "../utils";
+import { cosineSimilarity, parseTtl } from "../utils";
 import { BaseCacheDriver } from "./base-cache-driver";
+
+/**
+ * Clone non-primitive values so cached state can't be mutated through
+ * references held by callers. Primitives are immutable and returned as-is.
+ */
+function cloneValue<T>(value: T): T {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  const type = typeof value;
+
+  if (type === "string" || type === "number" || type === "boolean") {
+    return value;
+  }
+
+  return structuredClone(value);
+}
 
 export class MemoryCacheDriver
   extends BaseCacheDriver<MemoryCacheDriver, MemoryCacheOptions>
@@ -24,20 +40,25 @@ export class MemoryCacheDriver
   public name = "memory";
 
   /**
-   * Cached data
+   * Flat storage keyed by the parsed key. Insertion order doubles as LRU
+   * order (least recently used first) — accessed entries are deleted and
+   * re-inserted.
    */
-  public data: GenericObject = {};
+  protected entries: Map<string, CacheData> = new Map();
 
   /**
-   * List of data that will be cleared from cache
+   * Read-only object view of the stored entries, keyed by parsed key.
+   * Kept for introspection; the values are the live stored wrappers.
    */
-  protected temporaryData: Record<
-    string,
-    {
-      key: string;
-      expiresAt: number;
-    }
-  > = {};
+  public get data(): Record<string, CacheData> {
+    return Object.fromEntries(this.entries);
+  }
+
+  /**
+   * Expiry records for entries with a FINITE ttl only (parsed key => expiresAt ms).
+   * The sweep iterates just these.
+   */
+  protected expiry: Map<string, number> = new Map();
 
   /**
    * Cleanup interval reference
@@ -45,14 +66,10 @@ export class MemoryCacheDriver
   protected cleanupInterval?: NodeJS.Timeout;
 
   /**
-   * Access order tracking for LRU eviction (when maxSize is set)
-   */
-  protected accessOrder: string[] = [];
-
-  /**
    * Parallel vector index keyed by parsedKey. Populated by `set({ vector })`,
    * scanned by `similar()`. Lifetime mirrors the main entry — cleared on
-   * `remove`, `flush`, expiry, namespace clear, and LRU eviction.
+   * `remove`, `flush`, expiry, namespace clear, overwrite without a vector,
+   * and LRU eviction.
    */
   protected vectorIndex: Map<string, number[]> = new Map();
 
@@ -66,7 +83,7 @@ export class MemoryCacheDriver
   }
 
   /**
-   * Start the cleanup process whenever a data that has a cache key is set
+   * Start the cleanup process for entries that carry a finite ttl
    */
   public startCleanup() {
     // Clear existing interval if any
@@ -76,27 +93,97 @@ export class MemoryCacheDriver
 
     this.cleanupInterval = setInterval(async () => {
       const now = Date.now();
+      const expiredKeys: string[] = [];
 
-      // `Object.entries` rather than `for...in` + index. Two reasons, and the
-      // second is not about types at all: under `noUncheckedIndexedAccess` the
-      // index read is `T | undefined`, AND this loop DELETES from the object it
-      // is iterating. `for...in` over a mutating object has
-      // implementation-defined behaviour for keys not yet visited; entries
-      // snapshots first, so the deletion below is unambiguous.
-      for (const [key, entry] of Object.entries(this.temporaryData)) {
-        if (entry.expiresAt <= now) {
-          await this.remove(entry.key);
-          delete this.temporaryData[key];
-
-          this.log("expired", key);
-          // Emit expired event
-          await this.emit("expired", { key });
+      for (const [key, expiresAt] of this.expiry) {
+        if (expiresAt <= now) {
+          expiredKeys.push(key);
         }
+      }
+
+      for (const key of expiredKeys) {
+        // the entry may have been rewritten/slid since the snapshot
+        const expiresAt = this.expiry.get(key);
+
+        if (expiresAt === undefined || expiresAt > now) {
+          continue;
+        }
+
+        this.dropEntry(key);
+
+        this.log("expired", key);
+        // Emit expired event
+        await this.emit("expired", { key });
       }
     }, 1000);
 
     // do not block the process from exiting
     this.cleanupInterval.unref();
+  }
+
+  /**
+   * Delete an entry and every side record (expiry, vector). Synchronous.
+   */
+  protected dropEntry(parsedKey: string) {
+    this.entries.delete(parsedKey);
+    this.expiry.delete(parsedKey);
+    this.vectorIndex.delete(parsedKey);
+  }
+
+  /**
+   * Raw, synchronous read of a live entry. An expired entry is deleted and
+   * reported as missing. Never slides TTLs, never emits, never touches LRU order.
+   */
+  protected readLive(parsedKey: string): CacheData | undefined {
+    const entry = this.entries.get(parsedKey);
+
+    if (!entry) {
+      return undefined;
+    }
+
+    if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
+      this.dropEntry(parsedKey);
+      return undefined;
+    }
+
+    return entry;
+  }
+
+  /**
+   * Mark an entry as most recently used (only tracked when `maxSize` is set).
+   */
+  protected touch(parsedKey: string, entry: CacheData) {
+    if (!this.options.maxSize) return;
+
+    this.entries.delete(parsedKey);
+    this.entries.set(parsedKey, entry);
+  }
+
+  /**
+   * When true, every live read slides the entry's expiration forward by its
+   * ttl (the `memoryExtended` driver). Set in a subclass constructor rather
+   * than redeclared, so subclasses stay structurally compatible with this
+   * class (the `client` type relies on that).
+   */
+  protected slidingExpiration = false;
+
+  /**
+   * Invoked on a live read hit, before the value is returned. Runs only from
+   * `get()` after the expiry check, so an expired entry is never resurrected,
+   * and never from the internal existence check used by `onConflict`.
+   */
+  protected onRead(parsedKey: string, entry: CacheData) {
+    if (!this.slidingExpiration) {
+      return;
+    }
+
+    const rawTtl = entry.ttl ?? this.options.ttl;
+    const ttl = rawTtl !== undefined ? parseTtl(rawTtl) : undefined;
+
+    if (ttl && Number.isFinite(ttl)) {
+      entry.expiresAt = this.getExpiresAt(ttl);
+      this.expiry.set(parsedKey, entry.expiresAt as number);
+    }
   }
 
   /**
@@ -107,16 +194,16 @@ export class MemoryCacheDriver
 
     namespace = this.parseKey(namespace);
 
-    unset(this.data, [namespace]);
-
-    // Drop vector entries that fall under this namespace.
     if (namespace === "") {
+      this.entries.clear();
+      this.expiry.clear();
       this.vectorIndex.clear();
     } else {
       const prefix = namespace + ".";
-      for (const k of [...this.vectorIndex.keys()]) {
-        if (k === namespace || k.startsWith(prefix)) {
-          this.vectorIndex.delete(k);
+
+      for (const key of [...this.entries.keys()]) {
+        if (key === namespace || key.startsWith(prefix)) {
+          this.dropEntry(key);
         }
       }
     }
@@ -128,6 +215,9 @@ export class MemoryCacheDriver
 
   /**
    * {@inheritdoc}
+   *
+   * The conditional check and the write run with no `await` in between, so
+   * `onConflict` decisions are atomic within the process.
    */
   public async set(
     key: CacheKey,
@@ -139,42 +229,41 @@ export class MemoryCacheDriver
 
     this.log("caching", parsedKey);
 
-    // Use get() for the existence check so expired entries are treated as
-    // missing (and cleaned up as a side effect). A raw map lookup would let
-    // stale entries block onConflict: "create" even after their TTL elapsed.
-    const existingValue = onConflict === "upsert" ? null : await this.get(key);
-    const exists = existingValue !== null;
+    // expired entries count as missing (readLive deletes them)
+    const existing = onConflict === "create" || onConflict === "update" ? this.readLive(parsedKey) : undefined;
 
-    if (onConflict === "create" && exists) {
-      const result: CacheSetResult = { wasSet: false, existing: existingValue };
+    if (onConflict === "create" && existing) {
+      const result: CacheSetResult = { wasSet: false, existing: cloneValue(existing.data) };
       return result;
     }
 
-    if (onConflict === "update" && !exists) {
+    if (onConflict === "update" && !existing) {
       const result: CacheSetResult = { wasSet: false, existing: null };
       return result;
     }
 
-    const data = this.prepareDataForStorage(value, ttl, staleAt);
+    const data = this.prepareDataForStorage(cloneValue(value), ttl, staleAt);
 
-    if (ttl) {
-      this.setTemporaryData(key, parsedKey, ttl);
-    }
+    // delete + set moves the key to the most-recent position
+    this.entries.delete(parsedKey);
+    this.entries.set(parsedKey, data);
 
-    set(this.data, parsedKey, data);
-
-    this.trackAccess(parsedKey);
-
-    if (!exists && this.options.maxSize) {
-      await this.enforceMaxSize();
-    }
-
-    if (tags && tags.length > 0) {
-      await this.applyTags(key, tags);
+    if (data.expiresAt !== undefined && Number.isFinite(data.expiresAt)) {
+      this.expiry.set(parsedKey, data.expiresAt);
+    } else {
+      this.expiry.delete(parsedKey);
     }
 
     if (vector) {
       this.vectorIndex.set(parsedKey, vector.slice());
+    } else {
+      this.vectorIndex.delete(parsedKey);
+    }
+
+    this.enforceMaxSize(parsedKey);
+
+    if (tags && tags.length > 0) {
+      await this.applyTags(key, tags);
     }
 
     this.log("cached", parsedKey);
@@ -196,9 +285,10 @@ export class MemoryCacheDriver
    * the compare-and-delete is atomic within the process.
    */
   protected async deleteIfEquals(key: CacheKey, expected: unknown): Promise<boolean> {
-    const entry: CacheData | undefined = get(this.data, this.parseKey(key));
+    const parsedKey = this.parseKey(key);
+    const entry = this.readLive(parsedKey);
 
-    if (!entry || (entry.expiresAt && entry.expiresAt < Date.now()) || entry.data !== expected) {
+    if (!entry || entry.data !== expected) {
       return false;
     }
 
@@ -215,48 +305,39 @@ export class MemoryCacheDriver
 
     this.log("fetching", parsedKey);
 
-    const value: CacheData = get(this.data, parsedKey);
+    const entry = this.readLive(parsedKey);
 
-    if (!value) {
+    if (!entry) {
       this.log("notFound", parsedKey);
       // Emit miss event
       await this.emit("miss", { key: parsedKey });
       return null;
     }
 
-    const result = await this.parseCachedData(parsedKey, value);
+    this.onRead(parsedKey, entry);
+    this.touch(parsedKey, entry);
 
-    if (result === null) {
-      // Expired
-      await this.emit("miss", { key: parsedKey });
-    } else {
-      // Track access for LRU
-      this.trackAccess(parsedKey);
-      // Emit hit event
-      await this.emit("hit", { key: parsedKey, value: result });
-    }
+    const result = await this.parseCachedData(parsedKey, entry);
+
+    // Emit hit event
+    await this.emit("hit", { key: parsedKey, value: result });
 
     return result;
   }
 
   /**
-   * Read the raw {@link CacheData} wrapper, including `staleAt` metadata.
+   * Read the raw {@link CacheData} wrapper (cloned), including `staleAt` metadata.
    * Returns `null` for missing or expired entries so the SWR flow can branch
    * cleanly. Does not emit `hit`/`miss` events — that's `get()`'s job.
    */
   protected async getEntry(key: CacheKey): Promise<CacheData | null> {
-    const parsedKey = this.parseKey(key);
-    const entry: CacheData | undefined = get(this.data, parsedKey);
+    const entry = this.readLive(this.parseKey(key));
 
     if (!entry) {
       return null;
     }
 
-    if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
-      return null;
-    }
-
-    return entry;
+    return { ...entry, data: cloneValue(entry.data) };
   }
 
   /**
@@ -267,16 +348,7 @@ export class MemoryCacheDriver
 
     this.log("removing", parsedKey);
 
-    unset(this.data, [parsedKey]);
-
-    // Clean up from temporaryData as well
-    delete this.temporaryData[parsedKey];
-
-    // Remove from access order
-    this.removeFromAccessOrder(parsedKey);
-
-    // Drop the vector index entry if any
-    this.vectorIndex.delete(parsedKey);
+    this.dropEntry(parsedKey);
 
     this.log("removed", parsedKey);
 
@@ -290,10 +362,10 @@ export class MemoryCacheDriver
   public async flush() {
     this.log("flushing");
     if (this.options.globalPrefix) {
-      this.removeNamespace("");
+      await this.removeNamespace("");
     } else {
-      this.data = {};
-      this.accessOrder = [];
+      this.entries.clear();
+      this.expiry.clear();
       this.vectorIndex.clear();
     }
 
@@ -304,73 +376,29 @@ export class MemoryCacheDriver
   }
 
   /**
-   * Set the temporary data
+   * Evict least recently used entries (Map insertion order) until the size is
+   * within `maxSize`. Never evicts `protectedKey` (the key just written).
    */
-  protected setTemporaryData(key: CacheKey, parsedKey: string, ttl: number) {
-    this.temporaryData[parsedKey] = {
-      key: JSON.stringify(key),
-      expiresAt: Date.now() + ttl * 1000,
-    };
-  }
+  protected enforceMaxSize(protectedKey: string) {
+    const maxSize = this.options.maxSize;
 
-  /**
-   * Track access for LRU eviction
-   */
-  protected trackAccess(key: string) {
-    if (!this.options.maxSize) return;
-
-    // Remove key from current position
-    const index = this.accessOrder.indexOf(key);
-    if (index > -1) {
-      this.accessOrder.splice(index, 1);
-    }
-
-    // Add to end (most recently used)
-    this.accessOrder.push(key);
-  }
-
-  /**
-   * Remove key from access order tracking
-   */
-  protected removeFromAccessOrder(key: string) {
-    const index = this.accessOrder.indexOf(key);
-    if (index > -1) {
-      this.accessOrder.splice(index, 1);
-    }
-  }
-
-  /**
-   * Enforce max size by evicting least recently used items.
-   *
-   * Recomputes the live cache size on every iteration — a single snapshot at
-   * the top of the loop would go stale and cause this routine to evict every
-   * entry in `accessOrder` (including the just-inserted key).
-   */
-  protected async enforceMaxSize() {
-    if (!this.options.maxSize) {
+    if (!maxSize) {
       return;
     }
 
-    while (this.getCacheSize() > this.options.maxSize && this.accessOrder.length > 0) {
-      const lruKey = this.accessOrder.shift();
-      if (!lruKey) {
+    for (const lruKey of [...this.entries.keys()]) {
+      if (this.entries.size <= maxSize) {
         break;
       }
 
+      if (lruKey === protectedKey) {
+        continue;
+      }
+
       this.log("removing", lruKey);
-      unset(this.data, [lruKey]);
-      delete this.temporaryData[lruKey];
-      this.vectorIndex.delete(lruKey);
+      this.dropEntry(lruKey);
       this.log("removed", lruKey);
     }
-  }
-
-  /**
-   * Get current cache size (number of cached items)
-   */
-  protected getCacheSize(): number {
-    // Count top-level keys in data object
-    return Object.keys(this.data).length;
   }
 
   /**
@@ -391,30 +419,20 @@ export class MemoryCacheDriver
 
     const hits: CacheSimilarHit<T>[] = [];
 
-    for (const [parsedKey, stored] of this.vectorIndex) {
+    for (const [parsedKey, stored] of [...this.vectorIndex]) {
       if (tagFilter && !tagFilter.has(parsedKey)) {
         continue;
       }
 
       // Read the entry directly by its already-parsed key — this.get() would
       // parse it again and apply globalPrefix twice, missing every entry.
-      const entry: CacheData | undefined = get(this.data, parsedKey);
+      const entry = this.readLive(parsedKey);
 
       if (!entry) {
         continue;
       }
 
-      if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
-        continue;
-      }
-
-      let value: any = entry.data;
-      if (value !== null && value !== undefined) {
-        const type = typeof value;
-        if (type !== "string" && type !== "number" && type !== "boolean") {
-          value = structuredClone(value);
-        }
-      }
+      const value: any = cloneValue(entry.data);
 
       const score = cosineSimilarity(vector, stored);
 

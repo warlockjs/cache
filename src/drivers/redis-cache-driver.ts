@@ -60,6 +60,9 @@ loadRedis();
 /** KEYS[1]=key, ARGV[1]=expected raw value. 1 when deleted, 0 when not the owner. */
 export const REDIS_COMPARE_DELETE_SCRIPT = `if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('DEL', KEYS[1]) return 1 else return 0 end`;
 
+/** Keys deleted per UNLINK/DEL while draining a namespace. */
+const REMOVE_BATCH_SIZE = 500;
+
 // ============================================================
 // RedisCacheDriver Class
 // ============================================================
@@ -96,32 +99,70 @@ export class RedisCacheDriver
 
     // Escape Redis glob metacharacters so a namespace carrying `*`/`?`/`[`
     // cannot widen the match and delete keys outside its own prefix.
-    const pattern = namespace.replace(/[\\*?[\]]/g, "\\$&");
+    const escaped = namespace.replace(/[\\*?[\]]/g, "\\$&");
 
-    // `SCAN` (cursor-based, non-blocking) instead of `KEYS` — `KEYS` is O(N)
-    // and blocks the single-threaded Redis event loop for the full scan,
-    // which can stall every other tenant/consumer on a large keyspace.
-    const keys: string[] = [];
+    // Match the namespace key itself plus `<ns>.*` — never bare `<ns>*`, which
+    // would also swallow siblings like `users2`. An empty namespace (no prefix)
+    // means "everything".
+    const pattern = escaped === "" ? "*" : `${escaped}.*`;
+
+    const deleted: string[] = [];
 
     if (this.client) {
+      if (escaped !== "") {
+        const removedSelf = await this.deleteKeys([namespace]);
+
+        if (removedSelf > 0) {
+          deleted.push(namespace);
+        }
+      }
+
+      // `SCAN` (cursor-based, non-blocking) instead of `KEYS` — `KEYS` is O(N)
+      // and blocks the single-threaded Redis event loop. Delete per batch while
+      // scanning so memory stays bounded on large keyspaces.
+      let batch: string[] = [];
+
       for await (const key of this.client.scanIterator({
-        MATCH: `${pattern}*`,
+        MATCH: pattern,
         COUNT: 100,
       })) {
-        keys.push(key as unknown as string);
+        batch.push(key as unknown as string);
+
+        if (batch.length >= REMOVE_BATCH_SIZE) {
+          await this.deleteKeys(batch);
+          deleted.push(...batch);
+          batch = [];
+        }
+      }
+
+      if (batch.length > 0) {
+        await this.deleteKeys(batch);
+        deleted.push(...batch);
       }
     }
 
-    if (keys.length === 0) {
+    if (deleted.length === 0) {
       this.log("notFound", namespace);
       return;
     }
 
-    await this.client?.del(keys);
-
     this.log("cleared", namespace);
 
-    return keys;
+    return deleted;
+  }
+
+  /**
+   * Delete keys with `UNLINK` (non-blocking free), falling back to `DEL` when
+   * the client lacks it. Returns the number of keys removed.
+   */
+  protected async deleteKeys(keys: string[]): Promise<number> {
+    const client = this.client as any;
+
+    if (typeof client.unlink === "function") {
+      return Number(await client.unlink(keys)) || 0;
+    }
+
+    return Number(await client.del(keys)) || 0;
   }
 
   /**
@@ -177,7 +218,11 @@ export class RedisCacheDriver
       await this.applyTags(key, tags);
     }
 
-    if (staleAt !== undefined) {
+    if (staleAt === undefined) {
+      // A plain write invalidates any freshness marker left by an earlier SWR
+      // write, otherwise the old `staleAt` would apply to the new value.
+      await this.client?.del(this.swrMetaKey(parsedKey));
+    } else {
       // Sidecar key for SWR freshness — keeps the main value JSON
       // backwards-compatible with entries written before SWR landed.
       const sidecarOptions: { EX?: number } = {};
@@ -219,7 +264,7 @@ export class RedisCacheDriver
     }
 
     // Mirror remove(): drop the SWR sidecar and emit the event.
-    await this.client?.del([this.swrMetaKey(parsedKey)]);
+    await this.client?.del(this.swrMetaKey(parsedKey));
     await this.emit("removed", { key: parsedKey });
 
     return true;
@@ -230,7 +275,7 @@ export class RedisCacheDriver
    * wrapping the main value JSON.
    */
   protected swrMetaKey(parsedKey: string): string {
-    return `__swrmeta:${parsedKey}`;
+    return `${parsedKey}::swrmeta`;
   }
 
   /**
@@ -336,7 +381,9 @@ export class RedisCacheDriver
 
     // Drop the SWR sidecar alongside the main key — keeps metadata from
     // surviving a `remove` and confusing a later `swr` read.
-    await this.client?.del([key, this.swrMetaKey(key)]);
+    // Two separate DELs (not one multi-key DEL) so it stays cluster-slot safe.
+    await this.client?.del(key);
+    await this.client?.del(this.swrMetaKey(key));
 
     this.log("removed", key);
 
@@ -345,6 +392,10 @@ export class RedisCacheDriver
 
   /**
    * {@inheritDoc}
+   *
+   * WARNING: without a `globalPrefix` this runs `FLUSHDB`, which clears the
+   * WHOLE selected Redis database (including keys not written by this driver).
+   * Configure a `globalPrefix` to only delete this driver's keys.
    */
   public async flush() {
     this.log("flushing");
@@ -352,7 +403,7 @@ export class RedisCacheDriver
     if (this.options.globalPrefix) {
       await this.removeNamespace("");
     } else {
-      await this.client?.flushAll();
+      await this.client?.flushDb();
     }
 
     this.log("flushed");
@@ -420,6 +471,11 @@ export class RedisCacheDriver
       // the connection URL/password) never reaches stdout or the logger.
       log.fatal("cache", "redis", "Failed to connect", safeErrorInfo(error));
       await this.emit("error", { error });
+
+      // Drop the half-initialised client so a later connect() can retry.
+      this.clientDriver = undefined as unknown as typeof this.clientDriver;
+
+      throw error;
     }
   }
 
@@ -454,6 +510,11 @@ export class RedisCacheDriver
     this.log("caching", parsedKey);
 
     const result = await this.client?.incrBy(parsedKey, value);
+
+    // A fresh counter has no TTL; apply the driver default (only if none set).
+    if (this.ttl !== Infinity && this.ttl > 0) {
+      await this.client?.expire(parsedKey, this.ttl, "NX");
+    }
 
     this.log("cached", parsedKey);
 

@@ -1,66 +1,117 @@
+import { createHash } from "node:crypto";
 import { CacheConfigurationError } from "../types";
 
 /**
  * Derive a cache key from a prefix and a set of function arguments.
  *
- * Rules (in order of precedence):
- * 1. No args → prefix alone.
- * 2. All primitives (`string`, `number`, `boolean`) or `null` / `undefined` /
- *    `bigint` → joined onto the prefix with dots.
- * 3. Any non-primitive arg present → the full args array is `JSON.stringify`-ed
- *    and appended to the prefix.
- * 4. Serialization throws (circular refs, `BigInt` nested in an object) → we
- *    re-throw as `CacheConfigurationError` so the caller sees a cache-scoped
- *    error rather than a cryptic `TypeError`.
+ * The key is `<prefix>.<hash>` where `hash` is the first 16 hex chars of the
+ * sha1 of a stable JSON encoding of the args. Hashing keeps the mapping
+ * injective — raw punctuation-joined segments can be folded together by
+ * `parseCacheKey` (e.g. `("1.private", "")` vs `("1", "private")`).
+ *
+ * Encoding rules: object keys are sorted, `Date` → ISO string, `undefined` →
+ * `{"$u":1}`, `bigint` → decimal string with an `n` suffix.
+ *
+ * No args → the prefix alone.
+ *
+ * Map, Set, functions, symbols and class instances cannot be encoded stably
+ * and throw `CacheConfigurationError`; supply a custom `key` function instead.
  *
  * @example
- * deriveAutoKey("user", [42]);                         // "user.42"
- * deriveAutoKey("orders", [42, "abc"]);                // "orders.42.abc"
- * deriveAutoKey("featured", []);                       // "featured"
- * deriveAutoKey("search", [{ q: "hello" }]);           // "search.[{\"q\":\"hello\"}]"
- * deriveAutoKey("user", [null, undefined]);            // "user.null.undefined"
+ * deriveAutoKey("featured", []);        // "featured"
+ * deriveAutoKey("user", [42]);          // "user.<16 hex chars>"
  */
 export function deriveAutoKey(prefix: string, args: readonly unknown[]): string {
   if (args.length === 0) {
     return prefix;
   }
 
-  if (args.every(isPrimitiveOrNullish)) {
-    return prefix + "." + args.map(serializePrimitive).join(".");
-  }
+  let encoded: string;
 
   try {
-    return prefix + "." + JSON.stringify(args);
+    encoded = JSON.stringify(args.map((arg) => normalize(arg, prefix, new Set())));
   } catch (error) {
+    if (error instanceof CacheConfigurationError) {
+      throw error;
+    }
+
     throw new CacheConfigurationError(
       `cached(): could not derive an auto-key from args for prefix "${prefix}". ` +
-        `The args include a value that is not JSON-serializable (circular reference, ` +
-        `BigInt nested inside an object, or similar). Use the options form with a custom ` +
-        `key function. Original error: ${(error as Error).message}`,
+        `The args are not serializable. Use the options form with a custom key function. ` +
+        `Original error: ${(error as Error).message}`,
     );
   }
+
+  const hash = createHash("sha1").update(encoded).digest("hex").slice(0, 16);
+
+  return `${prefix}.${hash}`;
 }
 
-/**
- * Primitives and nullish values can be concatenated directly onto a key without
- * JSON serialization. Adding `bigint` here avoids the `JSON.stringify` throw on
- * top-level bigint args.
- */
-function isPrimitiveOrNullish(value: unknown): boolean {
-  if (value === null || value === undefined) {
-    return true;
+function unsupported(prefix: string, what: string): never {
+  throw new CacheConfigurationError(
+    `cached(): cannot derive an auto-key for prefix "${prefix}" from ${what}. ` +
+      `Use the options form with a custom key function.`,
+  );
+}
+
+function normalize(value: unknown, prefix: string, seen: Set<object>): unknown {
+  if (value === undefined) return { $u: 1 };
+  if (value === null) return null;
+
+  switch (typeof value) {
+    case "string":
+    case "boolean":
+      return value;
+    case "number":
+      // NaN / Infinity would collapse to null in JSON
+      return Number.isFinite(value) ? value : { $n: String(value) };
+    case "bigint":
+      return `${value.toString()}n`;
+    case "function":
+      return unsupported(prefix, "a function argument");
+    case "symbol":
+      return unsupported(prefix, "a symbol argument");
   }
 
-  const type = typeof value;
-  return type === "string" || type === "number" || type === "boolean" || type === "bigint";
-}
+  const obj = value as object;
 
-/**
- * Serialize a single primitive or nullish value to its string key-segment form.
- */
-function serializePrimitive(value: unknown): string {
-  if (value === null) return "null";
-  if (value === undefined) return "undefined";
-  if (typeof value === "bigint") return value.toString();
-  return String(value);
+  if (obj instanceof Date) {
+    return Number.isNaN(obj.getTime()) ? { $d: "invalid" } : obj.toISOString();
+  }
+
+  if (obj instanceof Map) return unsupported(prefix, "a Map argument");
+  if (obj instanceof Set) return unsupported(prefix, "a Set argument");
+
+  if (seen.has(obj)) {
+    throw new CacheConfigurationError(
+      `cached(): could not derive an auto-key for prefix "${prefix}": circular reference in args. ` +
+        `Use the options form with a custom key function.`,
+    );
+  }
+
+  seen.add(obj);
+
+  let result: unknown;
+
+  if (Array.isArray(obj)) {
+    result = obj.map((item) => normalize(item, prefix, seen));
+  } else {
+    const proto = Object.getPrototypeOf(obj);
+
+    if (proto !== Object.prototype && proto !== null) {
+      unsupported(prefix, "a class instance argument");
+    }
+
+    const out: Record<string, unknown> = {};
+
+    for (const key of Object.keys(obj).sort()) {
+      out[key] = normalize((obj as Record<string, unknown>)[key], prefix, seen);
+    }
+
+    result = out;
+  }
+
+  seen.delete(obj);
+
+  return result;
 }

@@ -1,8 +1,13 @@
-import { get } from "@mongez/reinforcements";
-import type { CacheData, CacheDriver, CacheKey, MemoryExtendedCacheOptions } from "../types";
-import { parseTtl } from "../utils";
+import type { CacheDriver, MemoryExtendedCacheOptions } from "../types";
 import { MemoryCacheDriver } from "./memory-cache-driver";
 
+/**
+ * Memory driver with a sliding ttl: every live read pushes the entry's
+ * expiration forward by its ttl. The sliding itself lives in
+ * `MemoryCacheDriver.onRead`, which checks expiry first, so an expired entry
+ * is never resurrected and the internal `onConflict` existence check never
+ * slides a held lock.
+ */
 export class MemoryExtendedCacheDriver
   extends MemoryCacheDriver
   implements CacheDriver<MemoryExtendedCacheDriver, MemoryExtendedCacheOptions>
@@ -12,30 +17,9 @@ export class MemoryExtendedCacheDriver
    */
   public name = "memoryExtended";
 
-  /**
-   * {@inheritdoc}
-   */
-  public async get(key: CacheKey) {
-    const parsedKey = this.parseKey(key);
+  public constructor() {
+    super();
 
-    this.log("fetching", parsedKey);
-
-    const value: CacheData = get(this.data, parsedKey);
-
-    if (!value) {
-      this.log("notFound", parsedKey);
-      return null;
-    }
-
-    const rawTtl = value.ttl ?? this.options.ttl;
-    const ttl = rawTtl !== undefined ? parseTtl(rawTtl) : undefined;
-
-    if (ttl) {
-      // reset the expiration time
-      this.setTemporaryData(key, parsedKey, ttl);
-      value.expiresAt = this.getExpiresAt(ttl);
-    }
-
-    return this.parseCachedData(parsedKey, value);
+    this.slidingExpiration = true;
   }
 }

@@ -31,6 +31,11 @@ class FakePool implements PgClientLike {
   /** Whether the pgvector extension is "installed" (drives the SELECT FROM pg_extension probe). */
   public pgvectorInstalled = true;
 
+  /** TTL seconds (bound param of `now() + make_interval`) → absolute Date. */
+  private static secsToDate(secs: number | null): Date | null {
+    return secs === null ? null : new Date(Date.now() + secs * 1000);
+  }
+
   /** Parse pgvector's text literal `'[1,2,3]'` back to a number[]. */
   private static parseVecLiteral(literal: string): number[] {
     return literal
@@ -99,6 +104,18 @@ class FakePool implements PgClientLike {
       return { rows: [{ value: row.value }], rowCount: 1 };
     }
 
+    // prune: DELETE FROM <t> WHERE ctid IN (SELECT ctid ... expires_at < now() LIMIT $1)
+    if (sql.startsWith(`DELETE FROM ${t} WHERE ctid IN`)) {
+      let removed = 0;
+      for (const [k, row] of [...this.store]) {
+        if (row.expires_at && row.expires_at <= new Date() && removed < (values![0] as number)) {
+          this.store.delete(k);
+          removed++;
+        }
+      }
+      return { rows: [], rowCount: removed };
+    }
+
     // DELETE FROM <t> WHERE key = $1
     if (sql.startsWith(`DELETE FROM ${t} WHERE key = $1`) && !sql.includes("LIKE")) {
       const key = values![0] as string;
@@ -139,7 +156,7 @@ class FakePool implements PgClientLike {
       const [key, valJson, expiresAt, staleAt, tags, vecLit] = values as [
         string,
         string,
-        Date | null,
+        number | null,
         Date | null,
         string[],
         string?,
@@ -150,7 +167,7 @@ class FakePool implements PgClientLike {
         return { rows: [], rowCount: 0 };
       }
       row.value = JSON.parse(valJson);
-      row.expires_at = expiresAt;
+      row.expires_at = FakePool.secsToDate(expiresAt);
       row.stale_at = staleAt;
       row.tags = tags;
       if (vecLit !== undefined) {
@@ -164,7 +181,7 @@ class FakePool implements PgClientLike {
       const [key, valJson, expiresAt, staleAt, tags, vecLit] = values as [
         string,
         string,
-        Date | null,
+        number | null,
         Date | null,
         string[],
         string?,
@@ -178,7 +195,7 @@ class FakePool implements PgClientLike {
         this.store.set(key, {
           key,
           value: parsed,
-          expires_at: expiresAt,
+          expires_at: FakePool.secsToDate(expiresAt),
           stale_at: staleAt,
           tags,
           embedding: vecLit !== undefined ? FakePool.parseVecLiteral(vecLit) : undefined,
@@ -195,7 +212,7 @@ class FakePool implements PgClientLike {
       const [key, valJson, expiresAt, staleAt, tags, vecLit] = values as [
         string,
         string,
-        Date | null,
+        number | null,
         Date | null,
         string[],
         string?,
@@ -204,7 +221,7 @@ class FakePool implements PgClientLike {
       this.store.set(key, {
         key,
         value: parsed,
-        expires_at: expiresAt,
+        expires_at: FakePool.secsToDate(expiresAt),
         stale_at: staleAt,
         tags,
         embedding: vecLit !== undefined ? FakePool.parseVecLiteral(vecLit) : undefined,
@@ -452,6 +469,22 @@ describe("PgCacheDriver — TTL handling", () => {
     const row = pool.store.get("k")!;
     expect(row.expires_at).toBeInstanceOf(Date);
     expect(row.expires_at!.getTime()).toBeGreaterThan(Date.now() + 3500_000);
+  });
+
+  it("computes expires_at on the DB clock via now() + make_interval", async () => {
+    await driver.set("k", 1, "1h");
+    const write = pool.queryLog.find(q => q.text.includes("INSERT INTO"))!;
+    expect(write.text).toContain("now() + make_interval");
+    expect(write.values![2]).toBe(3600);
+  });
+
+  it("prune() deletes expired rows", async () => {
+    await driver.set("a", 1);
+    await driver.set("b", 2, "1h");
+    pool.store.get("b")!.expires_at = new Date(Date.now() - 1000);
+    await expect(driver.prune()).resolves.toBe(1);
+    expect(pool.store.has("b")).toBe(false);
+    expect(pool.store.has("a")).toBe(true);
   });
 
   it("stores expires_at as null when ttl is Infinity / not set", async () => {

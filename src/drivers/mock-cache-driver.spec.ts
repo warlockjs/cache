@@ -162,13 +162,21 @@ describe("MockCacheDriver — introspection helpers", () => {
   });
 
   it("getStored returns the raw value bypassing TTL handling", async () => {
-    await driver.set("k", { foo: "bar" }, 0.001);
+    // TTLs are whole seconds (sub-second values round UP to 1s), so move the
+    // clock past the 1s ttl instead of sleeping a few milliseconds.
+    vi.useFakeTimers();
 
-    // even after a short delay the raw entry is still present
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    try {
+      await driver.set("k", { foo: "bar" }, 1);
 
-    expect(driver.getStored<{ foo: string }>("k")).toEqual({ foo: "bar" });
-    expect(await driver.get("k")).toBeNull(); // get respects ttl
+      vi.advanceTimersByTime(1500);
+
+      // the raw entry is still present after expiry
+      expect(driver.getStored<{ foo: string }>("k")).toEqual({ foo: "bar" });
+      expect(await driver.get("k")).toBeNull(); // get respects ttl
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("getStored returns undefined for missing keys", () => {
@@ -220,5 +228,20 @@ describe("MockCacheDriver — registers as a normal driver", () => {
 
     const driver = manager.currentDriver as MockCacheDriver;
     expect(driver.wasCalled("set", "hello")).toBe(true);
+  });
+});
+
+describe("MockCacheDriver — atomic conditional set", () => {
+  it("concurrent onConflict create sets exactly one", async () => {
+    const driver = new MockCacheDriver();
+    driver.setOptions({});
+    driver.setLoggingState(false);
+
+    const results = (await Promise.all([
+      driver.set("k", "a", { onConflict: "create" }),
+      driver.set("k", "b", { onConflict: "create" }),
+    ])) as { wasSet: boolean }[];
+
+    expect(results.filter((r) => r.wasSet)).toHaveLength(1);
   });
 });

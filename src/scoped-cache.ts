@@ -267,32 +267,52 @@ export class ScopedCache implements ScopedCacheContract {
   }
 
   /**
-   * Atomic read-modify-write. Falls back to the scope's `ttl` when the caller
-   * doesn't provide one; the source still keeps the existing entry's TTL on
-   * an update unless `options.ttl` is explicitly set.
+   * Atomic read-modify-write. An explicit `options.ttl` always wins. Otherwise
+   * the scope's default `ttl` is applied only when the key does not exist yet;
+   * for an existing key no ttl is passed so the source preserves the entry's
+   * remaining TTL.
    */
-  public update<T = any>(
+  public async update<T = any>(
     key: CacheKey,
     fn: (current: T | null) => T | null | Promise<T | null>,
     options?: { ttl?: CacheTtl },
   ): Promise<T | null> {
-    return this.source.update<T>(this.scopedKey(key), fn, {
-      ttl: options?.ttl ?? this.defaults.ttl,
-    });
+    const scopedKey = this.scopedKey(key);
+
+    return this.source.update<T>(scopedKey, fn, await this.writeOptions(scopedKey, options));
   }
 
   /**
    * Shallow-merge a partial object into the scoped entry. Same TTL semantics
    * as {@link update}.
    */
-  public merge<T extends Record<string, any> = Record<string, any>>(
+  public async merge<T extends Record<string, any> = Record<string, any>>(
     key: CacheKey,
     partial: Partial<T>,
     options?: { ttl?: CacheTtl },
   ): Promise<T> {
-    return this.source.merge<T>(this.scopedKey(key), partial, {
-      ttl: options?.ttl ?? this.defaults.ttl,
-    });
+    const scopedKey = this.scopedKey(key);
+
+    return this.source.merge<T>(scopedKey, partial, await this.writeOptions(scopedKey, options));
+  }
+
+  /**
+   * Resolve the ttl options for update/merge: explicit ttl, else the scope
+   * default only for keys that don't exist yet, else nothing (keep remaining).
+   */
+  private async writeOptions(
+    scopedKey: CacheKey,
+    options?: { ttl?: CacheTtl },
+  ): Promise<{ ttl?: CacheTtl }> {
+    if (options?.ttl !== undefined) {
+      return { ttl: options.ttl };
+    }
+
+    if (this.defaults.ttl === undefined) {
+      return {};
+    }
+
+    return (await this.source.has(scopedKey)) ? {} : { ttl: this.defaults.ttl };
   }
 
   /**

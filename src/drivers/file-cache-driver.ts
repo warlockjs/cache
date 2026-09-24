@@ -1,8 +1,10 @@
+import { randomBytes } from "node:crypto";
+import fs from "node:fs";
 import {
+  atomicWriteJsonAsync,
   ensureDirectoryAsync,
   getJsonFileAsync,
   listDirectoriesAsync,
-  putJsonFileAsync,
   removeDirectoryAsync,
 } from "@warlock.js/fs";
 import path from "path";
@@ -79,6 +81,12 @@ export class FileCacheDriver
    * only ever produces a single filesystem component here.
    */
   protected keyDirectory(parsedKey: string): string {
+    // An empty key would resolve to the cache root — `remove("{}")` must never
+    // be able to wipe it.
+    if (parsedKey === "") {
+      throw new CacheConfigurationError("Cache key must not be empty.");
+    }
+
     return this.containedPath(this.encodeKeySegment(parsedKey));
   }
 
@@ -178,6 +186,10 @@ export class FileCacheDriver
 
   /**
    * {@inheritdoc}
+   *
+   * `onConflict: "create"` is exclusive (temp file + hard link, so `lock()`
+   * is safe across concurrent writers). `onConflict: "update"` is NOT atomic:
+   * the existence probe and the write are separate steps.
    */
   public async set(
     key: CacheKey,
@@ -195,13 +207,8 @@ export class FileCacheDriver
 
     this.log("caching", parsedKey);
 
-    const existing = onConflict === "upsert" ? null : await this.get(key);
+    const existing = onConflict === "upsert" || onConflict === "create" ? null : await this.get(key);
     const exists = existing !== null;
-
-    if (onConflict === "create" && exists) {
-      const result: CacheSetResult = { wasSet: false, existing };
-      return result;
-    }
 
     if (onConflict === "update" && !exists) {
       const result: CacheSetResult = { wasSet: false, existing: null };
@@ -214,7 +221,18 @@ export class FileCacheDriver
 
     await ensureDirectoryAsync(fileDirectory);
 
-    await putJsonFileAsync(path.resolve(fileDirectory, this.fileName), data);
+    const filePath = path.resolve(fileDirectory, this.fileName);
+
+    if (onConflict === "create") {
+      const conflict = await this.writeExclusive(filePath, data);
+
+      if (conflict) {
+        const result: CacheSetResult = { wasSet: false, existing: conflict.existing };
+        return result;
+      }
+    } else {
+      await atomicWriteJsonAsync(filePath, data);
+    }
 
     if (tags && tags.length > 0) {
       await this.applyTags(key, tags);
@@ -230,6 +248,63 @@ export class FileCacheDriver
     }
 
     return this;
+  }
+
+  /**
+   * Create `filePath` only if it does not exist. Writes a temp file, then
+   * hard-links it to the target (EEXIST = already present). An existing but
+   * expired entry is removed (the file only, never the directory) and the
+   * link retried once.
+   *
+   * Returns `null` when written, or `{ existing }` on conflict.
+   */
+  protected async writeExclusive(
+    filePath: string,
+    data: CacheData,
+  ): Promise<{ existing: any } | null> {
+    const tempPath = `${filePath}.${randomBytes(6).toString("hex")}.tmp`;
+
+    try {
+      await fs.promises.writeFile(tempPath, JSON.stringify(data, null, 2));
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await fs.promises.link(tempPath, filePath);
+          return null;
+        } catch (error: any) {
+          if (error?.code !== "EEXIST") {
+            throw error;
+          }
+        }
+
+        let current: CacheData | undefined;
+
+        try {
+          current = (await getJsonFileAsync(filePath)) as CacheData | undefined;
+        } catch {
+          current = undefined;
+        }
+
+        const expired =
+          current?.expiresAt !== undefined && current.expiresAt !== null && current.expiresAt <= Date.now();
+
+        if (current && !expired) {
+          return { existing: current.data ?? null };
+        }
+
+        if (attempt === 0 && expired) {
+          await fs.promises.rm(filePath, { force: true });
+          continue;
+        }
+
+        // Unreadable (corrupt) file: treat as held, never delete it.
+        return { existing: null };
+      }
+
+      return { existing: null };
+    } finally {
+      await fs.promises.unlink(tempPath).catch(() => undefined);
+    }
   }
 
   /**
@@ -293,31 +368,35 @@ export class FileCacheDriver
 
     const fileDirectory = this.keyDirectory(parsedKey);
 
+    let value: CacheData | undefined;
+
     try {
-      const value = await getJsonFileAsync(path.resolve(fileDirectory, this.fileName));
+      value = (await getJsonFileAsync(path.resolve(fileDirectory, this.fileName))) as
+        | CacheData
+        | undefined;
+    } catch {
+      // Missing file (ENOENT) or corrupt JSON: a plain miss. Never remove the
+      // directory here — it may be mid-write by another process.
+      value = undefined;
+    }
 
-      const result = await this.parseCachedData(parsedKey, value as CacheData);
-
-      if (result === null) {
-        // Expired
-        await this.emit("miss", { key: parsedKey });
-      } else {
-        // Emit hit event
-        await this.emit("hit", { key: parsedKey, value: result });
-      }
-
-      return result;
-    } catch (error) {
+    if (value === undefined || value === null || typeof value !== "object") {
       this.log("notFound", parsedKey);
-      // Emit miss event
       await this.emit("miss", { key: parsedKey });
-      // Await the cleanup so it fully settles before returning. Leaving this
-      // fire-and-forget let the async directory removal race a follow-up write
-      // to the same key (e.g. the existence probe inside a `set({ onConflict })`
-      // call), surfacing as an ENOENT mkdir/rm collision on Windows.
-      await this.remove(key);
       return null;
     }
+
+    // Only a successfully parsed but expired entry is removed (inside
+    // parseCachedData).
+    const result = await this.parseCachedData(parsedKey, value);
+
+    if (result === null) {
+      await this.emit("miss", { key: parsedKey });
+    } else {
+      await this.emit("hit", { key: parsedKey, value: result });
+    }
+
+    return result;
   }
 
   /**

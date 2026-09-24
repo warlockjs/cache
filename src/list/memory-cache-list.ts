@@ -8,13 +8,14 @@ import type { CacheDriver, CacheKey, CacheListAccessor } from "../types";
  * driver overrides `list()` to return a native-command accessor instead.
  *
  * **Role.** Fallback list accessor bound to a driver + key. Every mutation
- * fetches the array, transforms it in memory, and writes it back.
+ * runs through `driver.update()`, so it is serialized in-process and keeps the
+ * entry's remaining TTL.
  *
  * **Responsibility.**
  * - Owns: translating list operations into array mutations + driver writes.
- * - Does NOT own: concurrency control (callers should wrap in a distributed
- *   lock when multi-process writers are possible), TTL preservation across
- *   ops (writes use driver defaults), or tagging of list entries.
+ * - Does NOT own: cross-process concurrency control (callers should wrap in a
+ *   distributed lock when multi-process writers are possible), or tagging of
+ *   list entries.
  *
  * @example
  * // Never constructed directly — obtained via driver.list():
@@ -36,70 +37,58 @@ export class MemoryCacheList<T> implements CacheListAccessor<T> {
   }
 
   /**
-   * Persist the backing array. Removes the entry when empty to keep the
-   * store clean.
+   * Serialized read-modify-write through `driver.update()`. No ttl is passed,
+   * so the driver keeps the entry's remaining TTL. An empty list removes the
+   * entry to keep the store clean.
    */
-  private async write(items: T[]): Promise<void> {
-    if (items.length === 0) {
-      await this.driver.remove(this.key);
-      return;
-    }
+  private async mutate<R>(mutation: (items: T[]) => R): Promise<R> {
+    let result!: R;
 
-    await this.driver.set(this.key, items);
+    await this.driver.update<T[]>(this.key, current => {
+      const items = Array.isArray(current) ? [...current] : [];
+
+      result = mutation(items);
+
+      return items.length === 0 ? null : items;
+    });
+
+    return result;
   }
 
   /**
    * {@inheritdoc}
    */
-  public async push(...items: T[]): Promise<number> {
-    const current = await this.read();
-    current.push(...items);
-    await this.write(current);
+  public push(...items: T[]): Promise<number> {
+    return this.mutate(current => {
+      current.push(...items);
 
-    return current.length;
+      return current.length;
+    });
   }
 
   /**
    * {@inheritdoc}
    */
-  public async unshift(...items: T[]): Promise<number> {
-    const current = await this.read();
-    current.unshift(...items);
-    await this.write(current);
+  public unshift(...items: T[]): Promise<number> {
+    return this.mutate(current => {
+      current.unshift(...items);
 
-    return current.length;
+      return current.length;
+    });
   }
 
   /**
    * {@inheritdoc}
    */
-  public async pop(): Promise<T | null> {
-    const current = await this.read();
-
-    if (current.length === 0) {
-      return null;
-    }
-
-    const value = current.pop() as T;
-    await this.write(current);
-
-    return value;
+  public pop(): Promise<T | null> {
+    return this.mutate(current => (current.length === 0 ? null : (current.pop() as T)));
   }
 
   /**
    * {@inheritdoc}
    */
-  public async shift(): Promise<T | null> {
-    const current = await this.read();
-
-    if (current.length === 0) {
-      return null;
-    }
-
-    const value = current.shift() as T;
-    await this.write(current);
-
-    return value;
+  public shift(): Promise<T | null> {
+    return this.mutate(current => (current.length === 0 ? null : (current.shift() as T)));
   }
 
   /**
@@ -126,12 +115,18 @@ export class MemoryCacheList<T> implements CacheListAccessor<T> {
   }
 
   /**
-   * {@inheritdoc}
+   * Keep the inclusive range `[start, end]` like Redis LTRIM; negative
+   * indexes count from the end.
    */
   public async trim(start: number, end: number): Promise<void> {
-    const current = await this.read();
-    const trimmed = current.slice(start, end + 1);
-    await this.write(trimmed);
+    await this.mutate(current => {
+      const length = current.length;
+      const from = start < 0 ? Math.max(length + start, 0) : start;
+      const to = end < 0 ? length + end : end;
+      const kept = current.slice(from, to + 1);
+
+      current.splice(0, current.length, ...kept);
+    });
   }
 
   /**

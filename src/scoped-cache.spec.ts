@@ -1,4 +1,3 @@
-import { get } from "@mongez/reinforcements";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "./cache-manager";
 import { MemoryCacheDriver } from "./drivers/memory-cache-driver";
@@ -6,17 +5,17 @@ import { ScopedCache } from "./scoped-cache";
 import type { LockOptions } from "./types";
 
 /**
- * Memory driver stores entries at a nested path (dot keys → object tree),
- * so we use `get` from reinforcements to peek through the dotted path.
+ * The memory driver stores entries flat, keyed by the full parsed key
+ * (`driver.data` is a read-only snapshot of that map).
  */
 function hasStored(manager: CacheManager, dottedKey: string): boolean {
   const driver = manager.currentDriver as MemoryCacheDriver;
-  return get(driver.data, dottedKey) !== undefined;
+  return driver.data[dottedKey] !== undefined;
 }
 
 function storedTtl(manager: CacheManager, dottedKey: string): number | undefined {
   const driver = manager.currentDriver as MemoryCacheDriver;
-  const entry = get(driver.data, dottedKey) as { ttl?: number } | undefined;
+  const entry = driver.data[dottedKey] as { ttl?: number } | undefined;
   return entry?.ttl;
 }
 
@@ -519,5 +518,26 @@ describe("cache.namespace — list()", () => {
     // The backing entry lives under the scoped key.
     expect(hasStored(cache, "feed.42.recent")).toBe(true);
     expect(hasStored(cache, "recent")).toBe(false);
+  });
+});
+
+describe("cache.namespace — merge ttl", () => {
+  it("keeps the remaining ttl when merging into an existing key", async () => {
+    const cache = await makeManager();
+    const scope = cache.namespace("m", { ttl: 30 });
+    await scope.set("k", { a: 1 }, { ttl: 100 });
+    await scope.merge("k", { b: 2 });
+    const ttl = storedTtl(cache, "m.k")!;
+    expect(ttl).toBeGreaterThan(30);
+    expect(ttl).toBeLessThanOrEqual(100);
+    await cache.disconnect();
+  });
+
+  it("applies the scope ttl when the key is new", async () => {
+    const cache = await makeManager();
+    const scope = cache.namespace("m", { ttl: 30 });
+    await scope.merge("fresh", { a: 1 });
+    expect(storedTtl(cache, "m.fresh")).toBe(30);
+    await cache.disconnect();
   });
 });

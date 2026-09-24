@@ -27,25 +27,35 @@ export function parseCacheKey(
  * Parse a TTL value into seconds.
  *
  * Accepts:
- * - a number (already in seconds) — returned unchanged
+ * - a number (seconds) — fractions are rounded UP to whole seconds
+ *   (so Redis `EX` never receives a fraction); `0` means "no expiry"
  * - `Infinity` — no expiration, returned unchanged
- * - a human-readable duration string (e.g. `"1h"`, `"30m"`, `"7d"`) — parsed via `ms` then converted to seconds
+ * - a bare numeric string (e.g. `"3600"`, from env vars) — treated as seconds
+ * - a human-readable duration string (e.g. `"1h"`, `"30m"`, `"7d"`) — parsed via `ms`,
+ *   then converted to seconds, rounding up
  *
- * Throws `CacheConfigurationError` on unparseable strings or negative numbers.
+ * Throws `CacheConfigurationError` on NaN, negative numbers, or unparseable strings.
  *
  * @example
  * parseTtl(3600);      // 3600
+ * parseTtl(0.5);       // 1
+ * parseTtl("3600");    // 3600
+ * parseTtl("500ms");   // 1
  * parseTtl("1h");      // 3600
  * parseTtl("7d");      // 604800
  * parseTtl(Infinity);  // Infinity
  */
 export function parseTtl(input: CacheTtl): number {
   if (typeof input === "number") {
+    if (Number.isNaN(input)) {
+      throw new CacheConfigurationError("Invalid TTL: NaN.");
+    }
+
     if (input < 0) {
       throw new CacheConfigurationError(`Invalid TTL: negative number (${input}).`);
     }
 
-    return input;
+    return Math.ceil(input);
   }
 
   if (typeof input !== "string" || input.trim() === "") {
@@ -54,7 +64,13 @@ export function parseTtl(input: CacheTtl): number {
     );
   }
 
-  const milliseconds = ms(input as StringValue);
+  const trimmed = input.trim();
+
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    return Math.ceil(Number(trimmed));
+  }
+
+  const milliseconds = ms(trimmed as StringValue);
 
   if (milliseconds === undefined || Number.isNaN(milliseconds)) {
     throw new CacheConfigurationError(
@@ -62,7 +78,11 @@ export function parseTtl(input: CacheTtl): number {
     );
   }
 
-  return Math.floor(milliseconds / 1000);
+  if (milliseconds < 0) {
+    throw new CacheConfigurationError(`Invalid TTL: negative duration ("${input}").`);
+  }
+
+  return Math.ceil(milliseconds / 1000);
 }
 
 /**

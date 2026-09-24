@@ -4,6 +4,32 @@ import { CacheConfigurationError } from "../types";
 
 type Handler = (...args: unknown[]) => void;
 
+/**
+ * Redis glob semantics for the fake client: `*` and `?` are wildcards,
+ * `\x` is a literal `x`, and every other character (including `.`) is
+ * literal — so `users.*` must NOT match `users2.x`.
+ */
+function globToRegExp(pattern: string): RegExp {
+  const escape = (char: string) => char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let source = "";
+
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i];
+
+    if (char === "\\" && i + 1 < pattern.length) {
+      source += escape(pattern[++i]);
+    } else if (char === "*") {
+      source += ".*";
+    } else if (char === "?") {
+      source += ".";
+    } else {
+      source += escape(char);
+    }
+  }
+
+  return new RegExp("^" + source + "$");
+}
+
 class FakeRedisClient {
   public store = new Map<string, string>();
   public expires = new Map<string, number>();
@@ -71,7 +97,7 @@ class FakeRedisClient {
   }
 
   public async keys(pattern: string): Promise<string[]> {
-    const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$");
+    const regex = globToRegExp(pattern);
     return [...this.store.keys()].filter((k) => regex.test(k));
   }
 
@@ -83,7 +109,7 @@ class FakeRedisClient {
     COUNT?: number;
   }): AsyncGenerator<string> {
     const pattern = options?.MATCH ?? "*";
-    const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$");
+    const regex = globToRegExp(pattern);
     const matches = [...this.store.keys()].filter((k) => regex.test(k));
     const batchSize = options?.COUNT ?? 10;
 
@@ -92,6 +118,22 @@ class FakeRedisClient {
         yield key;
       }
     }
+  }
+
+  public async unlink(keys: string | string[]): Promise<number> {
+    return this.del(keys);
+  }
+
+  public async expire(key: string, seconds: number, mode?: string): Promise<number> {
+    if (!this.store.has(key)) return 0;
+    if (mode === "NX" && this.expires.has(key)) return 0;
+    this.expires.set(key, Date.now() + seconds * 1000);
+    return 1;
+  }
+
+  public async flushDb(): Promise<void> {
+    this.store.clear();
+    this.expires.clear();
   }
 
   public async flushAll(): Promise<void> {
@@ -197,7 +239,7 @@ describe("RedisCacheDriver", () => {
       .spyOn(fakeClient, "connect")
       .mockRejectedValueOnce(new Error("connect ECONNREFUSED redis://u:s3cr3t@h:6379"));
 
-    await driver.connect();
+    await expect(driver.connect()).rejects.toThrow("ECONNREFUSED");
 
     expect(consoleSpy).not.toHaveBeenCalled();
     expect(fatalSpy).toHaveBeenCalled();
@@ -383,7 +425,7 @@ describe("RedisCacheDriver", () => {
     await driver.removeNamespace("tenant*evil?");
 
     expect(scanSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ MATCH: "tenant\\*evil\\?*" }),
+      expect.objectContaining({ MATCH: "tenant\\*evil\\?.*" }),
     );
     await expect(driver.get("tenant.other")).resolves.toBe("x");
   });
@@ -531,11 +573,86 @@ describe("RedisCacheDriver", () => {
     await driver.connect();
 
     await driver.set("k", "v", { ttl: 600, staleAt: Date.now() + 60_000 });
-    expect(fakeClient.store.has("__swrmeta:k")).toBe(true);
+    expect(fakeClient.store.has("k::swrmeta")).toBe(true);
 
     await driver.remove("k");
     expect(fakeClient.store.has("k")).toBe(false);
-    expect(fakeClient.store.has("__swrmeta:k")).toBe(false);
+    expect(fakeClient.store.has("k::swrmeta")).toBe(false);
+  });
+
+  it("removeNamespace('users') does not delete users2.x", async () => {
+    const RedisCacheDriver = await importDriver();
+    const driver = new RedisCacheDriver();
+    driver.setLoggingState(false);
+    driver.setOptions({ url: "redis://localhost" });
+    await driver.connect();
+
+    await driver.set("users", 1);
+    await driver.set("users.a", 2);
+    await driver.set("users2.x", 3);
+
+    const deleted = await driver.removeNamespace("users");
+
+    expect([...deleted!].sort()).toEqual(["users", "users.a"]);
+    await expect(driver.get("users2.x")).resolves.toBe(3);
+  });
+
+  it("flush without a prefix calls flushDb, not flushAll", async () => {
+    const RedisCacheDriver = await importDriver();
+    const driver = new RedisCacheDriver();
+    driver.setLoggingState(false);
+    driver.setOptions({ url: "redis://localhost" });
+    await driver.connect();
+
+    const dbSpy = vi.spyOn(fakeClient, "flushDb");
+    const allSpy = vi.spyOn(fakeClient, "flushAll");
+
+    await driver.flush();
+
+    expect(dbSpy).toHaveBeenCalled();
+    expect(allSpy).not.toHaveBeenCalled();
+  });
+
+  it("a plain set clears an existing SWR sidecar", async () => {
+    const RedisCacheDriver = await importDriver();
+    const driver = new RedisCacheDriver();
+    driver.setLoggingState(false);
+    driver.setOptions({ url: "redis://localhost" });
+    await driver.connect();
+
+    await driver.set("k", "v", { ttl: 600, staleAt: Date.now() + 60_000 });
+    expect(fakeClient.store.has("k::swrmeta")).toBe(true);
+
+    await driver.set("k", "v2");
+    expect(fakeClient.store.has("k::swrmeta")).toBe(false);
+  });
+
+  it("flush with a prefix also removes SWR sidecars", async () => {
+    const RedisCacheDriver = await importDriver();
+    const driver = new RedisCacheDriver();
+    driver.setLoggingState(false);
+    driver.setOptions({ url: "redis://localhost", globalPrefix: "tenant" });
+    await driver.connect();
+
+    await driver.set("k", "v", { ttl: 600, staleAt: Date.now() + 60_000 });
+    await driver.flush();
+
+    expect(fakeClient.store.size).toBe(0);
+  });
+
+  it("a failed connect() rejects and a later connect() can retry", async () => {
+    const RedisCacheDriver = await importDriver();
+    const driver = new RedisCacheDriver();
+    driver.setLoggingState(false);
+    driver.setOptions({ url: "redis://localhost" });
+
+    const { log } = await import("@warlock.js/logger");
+    vi.spyOn(log, "fatal").mockImplementation(() => log as any);
+    vi.spyOn(fakeClient, "connect").mockRejectedValueOnce(new Error("boom"));
+
+    await expect(driver.connect()).rejects.toThrow("boom");
+    await expect(driver.connect()).resolves.toBeUndefined();
+    expect(driver.client).toBe(fakeClient);
   });
 
   describe("swr (sidecar freshness key)", () => {
@@ -555,7 +672,7 @@ describe("RedisCacheDriver", () => {
       expect(second).toBe("fresh");
       expect(fetcher).toHaveBeenCalledTimes(1);
       // The sidecar freshness marker was written on the miss-fetch.
-      expect(fakeClient.store.has("__swrmeta:k")).toBe(true);
+      expect(fakeClient.store.has("k::swrmeta")).toBe(true);
     });
 
     it("serves the stale value and refreshes in the background past freshTtl", async () => {

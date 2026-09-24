@@ -19,9 +19,19 @@ describe("NullCacheDriver", () => {
     expect(driver.options).toEqual({ baz: 1 });
   });
 
-  it("parseKey returns empty string", () => {
+  it("parseKey returns distinct real keys", () => {
     const driver = new NullCacheDriver();
-    expect(driver.parseKey("anything")).toBe("");
+    expect(driver.parseKey("a")).not.toBe("");
+    expect(driver.parseKey("a")).not.toBe(driver.parseKey("b"));
+  });
+
+  it("concurrent remember calls return their own results", async () => {
+    const driver = new NullCacheDriver();
+    const [a, b] = await Promise.all([
+      driver.remember("a", 10, async () => "A"),
+      driver.remember("b", 10, async () => "B"),
+    ]);
+    expect([a, b]).toEqual(["A", "B"]);
   });
 
   it("get always returns null", async () => {
