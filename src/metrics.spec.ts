@@ -122,8 +122,8 @@ describe("cache.metrics — per-driver breakdown", () => {
     await cache.set("b", 2, { driver: "memoryExtended" });   // routed to memoryExtended
 
     const snapshot = cache.metrics();
-    expect(snapshot.byDriver.memory.hits).toBe(1);
-    expect(snapshot.byDriver.memory.sets).toBe(1);
+    expect(snapshot.byDriver.memory!.hits).toBe(1);
+    expect(snapshot.byDriver.memory!.sets).toBe(1);
     expect(snapshot.byDriver.memoryExtended?.sets).toBe(1);
   });
 });

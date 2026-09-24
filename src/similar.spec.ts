@@ -59,9 +59,9 @@ describe("MemoryCacheDriver — similar()", () => {
     const hits = await driver.similar([1, 0, 0], { topK: 3 });
 
     expect(hits.map((h) => h.key)).toEqual(["doc.a", "doc.b", "doc.c"]);
-    expect(hits[0].score).toBeGreaterThan(hits[1].score);
-    expect(hits[1].score).toBeGreaterThan(hits[2].score);
-    expect(hits[0].value).toEqual({ text: "a" });
+    expect(hits[0]!.score).toBeGreaterThan(hits[1]!.score);
+    expect(hits[1]!.score).toBeGreaterThan(hits[2]!.score);
+    expect(hits[0]!.value).toEqual({ text: "a" });
   });
 
   it("respects topK truncation", async () => {
@@ -131,8 +131,8 @@ describe("MemoryCacheDriver — similar()", () => {
     const original = { count: 1 };
     await driver.set("doc.a", original, { vector: [1, 0, 0] });
     const hits = await driver.similar<typeof original>([1, 0, 0], { topK: 1 });
-    expect(hits[0].value).toEqual(original);
-    expect(hits[0].value).not.toBe(original);
+    expect(hits[0]!.value).toEqual(original);
+    expect(hits[0]!.value).not.toBe(original);
   });
 });
 
@@ -154,7 +154,7 @@ describe("LRUMemoryCacheDriver — similar()", () => {
     await driver.set("b", 2, { vector: [0, 1, 0] });
 
     const hits = await driver.similar([1, 0, 0], { topK: 2 });
-    expect(hits[0].key).toBe("a");
+    expect(hits[0]!.key).toBe("a");
   });
 
   it("evicts vectorized entries from the similar() pool when capacity is exceeded", async () => {
@@ -216,7 +216,7 @@ describe("MemoryExtendedCacheDriver — similar()", () => {
   it("inherits the memory driver's similarity behavior", async () => {
     await driver.set("a", 1, { vector: [1, 0, 0] });
     const hits = await driver.similar([1, 0, 0], { topK: 1 });
-    expect(hits[0].key).toBe("a");
+    expect(hits[0]!.key).toBe("a");
   });
 });
 

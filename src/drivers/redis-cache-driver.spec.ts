@@ -14,10 +14,10 @@ function globToRegExp(pattern: string): RegExp {
   let source = "";
 
   for (let i = 0; i < pattern.length; i++) {
-    const char = pattern[i];
+    const char = pattern[i]!;
 
     if (char === "\\" && i + 1 < pattern.length) {
-      source += escape(pattern[++i]);
+      source += escape(pattern[++i]!);
     } else if (char === "*") {
       source += ".*";
     } else if (char === "?") {
@@ -214,7 +214,8 @@ class FakeRedisClient {
     options: { keys: string[]; arguments: string[] },
   ): Promise<unknown> {
     this.evalLog.push({ script, keys: options.keys, arguments: options.arguments });
-    const [key] = options.keys;
+    const key = options.keys[0];
+    if (!key) throw new Error("FakeRedisClient: Lua script requires a key.");
     const args = options.arguments;
 
     if (script.includes("KEEPTTL")) {
@@ -222,12 +223,12 @@ class FakeRedisClient {
       const current = await this.get(key);
       const expectMissing = args[2] === "1";
 
-      if (expectMissing ? current !== null : current !== args[0]) {
+      if (expectMissing ? current !== null : current !== args[0]!) {
         return 0;
       }
 
       const ttl = Number(args[3]);
-      this.store.set(key, args[1]);
+      this.store.set(key, args[1]!);
 
       if (args[4] === "keep" && !expectMissing) {
         // KEEPTTL: leave `expires` untouched
@@ -247,7 +248,7 @@ class FakeRedisClient {
     }
 
     if (script.includes("== ARGV[1] then redis.call('DEL'")) {
-      if ((await this.get(key)) !== args[0]) return 0;
+      if ((await this.get(key)) !== args[0]!) return 0;
       await this.del(key);
       return 1;
     }
@@ -362,7 +363,7 @@ describe("RedisCacheDriver", () => {
       expect(JSON.stringify(call)).not.toContain("s3cr3t");
     }
 
-    const context = fatalSpy.mock.calls[0][3] as { message?: string };
+    const context = fatalSpy.mock.calls[0]?.[3] as { message?: string } | undefined;
     expect(context?.message).toBe("connect ECONNREFUSED redis://[REDACTED]@h:6379");
 
     connectSpy.mockRestore();

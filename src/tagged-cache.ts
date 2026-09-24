@@ -87,7 +87,7 @@ export class TaggedCache implements TaggedCacheDriver {
     const start = members.length > limit ? Math.floor(Math.random() * members.length) : 0;
     const window = Array.from(
       { length: Math.min(limit, members.length) },
-      (_, index) => members[(start + index) % members.length],
+      (_, index) => members[(start + index) % members.length]!,
     );
 
     const missing: string[] = [];
