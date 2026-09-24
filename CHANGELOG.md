@@ -1,9 +1,14 @@
-# Changelog — @warlock.js/cache
+﻿# Changelog — @warlock.js/cache
 
 All notable changes to `@warlock.js/cache` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). `@warlock.js/*` packages are released in lockstep — every package shares the same version number, so a version below may list only the changes that affected this package.
 
+## 5.20.1
+
+### Changed
+
+- Lockstep release maintenance and dependency refresh.
 ## 5.20.0 - 2026-09-24
 
 ### Breaking
