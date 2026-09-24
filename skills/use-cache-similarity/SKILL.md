@@ -1,6 +1,6 @@
 ---
 name: use-cache-similarity
-description: "cache.similar() — vector-based retrieval in @warlock.js/cache; use when you need to use cache similarity."
+description: 'Vector retrieval via cache.similar(vector, {topK, threshold?, tags?}) — index with set(k, v, {vector}), query nearest by cosine similarity. Triggers: `cache.similar`, `cache.set` with `vector`, `topK`, `threshold`, `tags`, `cosineSimilarity`; "build a semantic cache for an LLM", "RAG retrieval from cache", "nearest-neighbor over cached entries", "skip the LLM when a similar answer exists"; typical import `import { cache } from "@warlock.js/cache"`. Skip: pgvector setup specifics — `@warlock.js/cache/configure-pg-cache/SKILL.md`; competing libs `pinecone`, `weaviate`, `chromadb`, `lancedb`, `faiss-node`.'
 ---
 
 # `cache.similar()` — vector-based retrieval

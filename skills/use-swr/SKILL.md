@@ -1,6 +1,6 @@
 ---
 name: use-swr
-description: "Stale-while-revalidate — cache.swr(key, options, fn) in @warlock.js/cache; use when you need to use swr."
+description: 'Stale-while-revalidate via cache.swr(key, {freshTtl, staleTtl}, fn) — returns cached instantly when fresh, returns cached + background refresh when stale, blocks only when fully expired. Triggers: `cache.swr`, `freshTtl`, `staleTtl`, `tags`, `driver`, `stale_at`; "serve stale while refreshing", "degrade when upstream is down", "never block on cache miss"; typical import `import { cache } from "@warlock.js/cache"`. Skip: block-until-fresh memoization — `@warlock.js/cache/apply-cache-patterns/SKILL.md`; observing refresh failures — `@warlock.js/cache/observe-cache/SKILL.md`; competing libs `swr` (React, client-side).'
 ---
 
 # Stale-while-revalidate — `cache.swr(key, options, fn)`

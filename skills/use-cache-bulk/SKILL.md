@@ -1,6 +1,6 @@
 ---
 name: use-cache-bulk
-description: "Bulk operations — cache.many / cache.setMany in @warlock.js/cache; use when you need to use cache bulk."
+description: 'Bulk reads/writes via cache.many(keys[]) → values[] (nulls for misses, order preserved) and cache.setMany(record, ttl?) → void. Triggers: `cache.many`, `cache.setMany`, "get multiple keys at once", "batch read cache", "warm the cache", "preload many keys", "mget", "mset"; typical import `import { cache } from "@warlock.js/cache"`. Skip: tag-based bulk invalidation — `@warlock.js/cache/use-cache-tags/SKILL.md`; single-key ops — `@warlock.js/cache/cache-basics/SKILL.md`; competing libs `ioredis` `MGET`/`MSET`.'
 ---
 
 # Bulk operations — `cache.many` / `cache.setMany`

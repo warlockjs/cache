@@ -1,6 +1,6 @@
 ---
 name: use-cache-utils
-description: "Cache utilities in @warlock.js/cache; use when you need to use cache utils."
+description: 'Low-level cache utilities re-exported from @warlock.js/cache — parseTtl, expiresAtToTtl, resolveTtl, normalizeToOptions, normalizeToRememberOptions, parseCacheKey, mergeTagSets, injectTags, cosineSimilarity, and the CACHE_FOR TTL enum. Triggers: `parseTtl`, `parseCacheKey`, `resolveTtl`, `expiresAtToTtl`, `cosineSimilarity`, `mergeTagSets`, `injectTags`, `CACHE_FOR`; "parse a duration to seconds", "build a cache key from an object", "score two vectors", "common TTL constant"; typical import `import { parseTtl, CACHE_FOR } from "@warlock.js/cache"`. Skip: building a whole custom driver — `@warlock.js/cache/pick-cache-driver/SKILL.md`; the high-level set API — `@warlock.js/cache/configure-set-options/SKILL.md`.'
 ---
 
 # Cache utilities

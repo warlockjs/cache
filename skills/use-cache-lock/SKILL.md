@@ -1,6 +1,6 @@
 ---
 name: use-cache-lock
-description: "cache.lock() — distributed locks with auto-release in @warlock.js/cache; use when you need to use cache lock."
+description: 'Distributed lock via cache.lock(key, ttl, fn) — acquire, run fn, auto-release. Returns {acquired: true, value} or {acquired: false}. Triggers: `cache.lock`, `LockOutcome`, `acquired`, `owner`; "run cron on only one server", "idempotent webhook handler", "dedup payment processing", "lock a task across nodes"; typical import `import { cache } from "@warlock.js/cache"`. Skip: raw `onConflict: "create"` recipe — `@warlock.js/cache/apply-cache-patterns/SKILL.md`; memoization — `@warlock.js/cache/use-cached-hof/SKILL.md`; competing libs `redlock`, `async-mutex`, `proper-lockfile`.'
 ---
 
 # `cache.lock()` — distributed locks with auto-release

@@ -1,6 +1,6 @@
 ---
 name: observe-cache
-description: "Cache observability — cache.metrics() and the event bus in @warlock.js/cache; use when you need to observe cache."
+description: 'Cache observability — cache.metrics() for aggregate hit rate / latency p50/p95/p99 + event bus (cache.on(''hit'' / ''miss'' / ''set'' / ''removed'' / ''flushed'' / ''expired'' / ''error'', ...)). Triggers: `cache.metrics`, `cache.resetMetrics`, `cache.on`, `hit`, `miss`, `removed`, `flushed`, `error`, `hitRate`, `latencyMs`; "show cache hit rate", "page on cache errors", "is my cache being hit", "export metrics to prometheus"; typical import `import { cache } from "@warlock.js/cache"`. Skip: error classes — `@warlock.js/cache/handle-cache-errors/SKILL.md`; competing libs `prom-client`, `statsd-client`.'
 ---
 
 # Cache observability — `cache.metrics()` and the event bus

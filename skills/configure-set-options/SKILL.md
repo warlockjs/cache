@@ -1,6 +1,6 @@
 ---
 name: configure-set-options
-description: "The set options object in @warlock.js/cache; use when you need to configure set options."
+description: 'Configure cache.set''s third argument — ttl, expiresAt, tags, onConflict (create / update / upsert), driver, vector. Triggers: `cache.set`, `ttl`, `expiresAt`, `tags`, `onConflict`, `driver`, `vector`, `CacheSetResult`, `wasSet`; "set a key only if missing", "set with absolute deadline", "attach tags inline", "route one cache call to redis"; typical import `import { cache } from "@warlock.js/cache"`. Skip: tag fluent API — `@warlock.js/cache/use-cache-tags/SKILL.md`; vector queries — `@warlock.js/cache/use-cache-similarity/SKILL.md`; competing libs `keyv`, `ioredis`.'
 ---
 
 # The `set` options object

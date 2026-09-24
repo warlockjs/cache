@@ -1,6 +1,6 @@
 ---
 name: configure-pg-cache
-description: "pg cache driver — Postgres setup in @warlock.js/cache; use when you need to configure pg cache."
+description: 'Postgres cache driver setup — KV-only mode (default) or pgvector mode (opt in via options.pg.vector). Caller owns the pg.Pool, driver exposes driver.schema() for one-time DDL. Triggers: `PgCacheDriver`, `driver.schema`, `options.pg.vector`, `pg.Pool`, `hnsw`, `ivfflat`; "use Postgres as cache backend", "set up pgvector semantic cache", "DDL for warlock cache table"; typical import `import { cache, PgCacheDriver } from "@warlock.js/cache"`. Skip: cross-driver similarity API — `@warlock.js/cache/use-cache-similarity/SKILL.md`; driver picker — `@warlock.js/cache/pick-cache-driver/SKILL.md`; competing libs `pg-mem`; raw `pg` / `node-postgres`.'
 ---
 
 # `pg` cache driver — Postgres setup
