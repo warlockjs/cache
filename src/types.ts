@@ -858,7 +858,11 @@ export interface CacheDriver<ClientType, Options> {
     callback: () => Promise<T>,
   ): Promise<T>;
   /**
-   * Get value and remove it from cache (atomic operation)
+   * Get a value and remove it, handing it out exactly once.
+   *
+   * Atomicity: across servers on `redis` (`GETDEL`) and `pg`
+   * (`DELETE … RETURNING`); within the process on `memory`, `memoryExtended`,
+   * `lru` and `mock`; serialized per key within the process only on `file`.
    */
   pull<T = any>(key: CacheKey): Promise<T | null>;
   /**
@@ -866,11 +870,16 @@ export interface CacheDriver<ClientType, Options> {
    */
   forever<T = any>(key: CacheKey, value: T): Promise<T>;
   /**
-   * Atomically read, transform, and write a cached value.
+   * Read, transform, and write a cached value without losing concurrent updates.
    *
    * The callback receives the current value (or `null` on miss) and returns the
    * next value. Returning `null` removes the key. TTL is preserved unless
    * explicitly overridden via options.
+   *
+   * Atomicity: across servers on `redis` and `pg` (optimistic
+   * compare-and-set with retries — `fn` may run more than once under
+   * contention, so keep it side-effect free). On every other driver updates
+   * are serialized per key within ONE process only. `file` does not support it.
    *
    * @example
    * await cache.update<User>("user:1", (current) => {
@@ -925,7 +934,12 @@ export interface CacheDriver<ClientType, Options> {
     fn: () => Promise<T>,
   ): Promise<LockOutcome<T>>;
   /**
-   * Increment a numeric value in cache
+   * Increment a numeric value in cache. A missing key starts from 0 with the
+   * driver default TTL; an existing key keeps its remaining TTL.
+   *
+   * Atomicity: across servers on `redis` (`INCRBY`) and `pg` (single
+   * upsert statement); within the process on `memory`, `memoryExtended`,
+   * `lru` and `mock`; serialized per key within the process only on `file`.
    *
    * @param key The cache key
    * @param value The value to increment by (default 1)

@@ -10,8 +10,12 @@ import type {
   PgCacheOptions,
   PgClientLike,
 } from "../types";
-import { CacheConfigurationError, CacheUnsupportedError } from "../types";
+import { CacheConfigurationError, CacheError, CacheUnsupportedError } from "../types";
+import { parseTtl } from "../utils";
 import { BaseCacheDriver } from "./base-cache-driver";
+
+/** Compare-and-set attempts before `update()` gives up under contention. */
+const PG_UPDATE_MAX_ATTEMPTS = 10;
 
 /**
  * Allowed characters in a Postgres identifier (table name). We accept the
@@ -518,6 +522,185 @@ export class PgCacheDriver
     }
 
     return entry;
+  }
+
+  /**
+   * Decode a JSONB column value (node-postgres usually parses it already;
+   * some pools hand back a string).
+   */
+  protected decodeJson(value: unknown): any {
+    if (typeof value === "string") {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return value;
+      }
+    }
+
+    return value;
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * One atomic `INSERT … ON CONFLICT DO UPDATE` statement, so concurrent
+   * increments from any number of servers never lose an update. A live row
+   * keeps its `expires_at`; a missing or expired row restarts from `value`
+   * with the driver default TTL. A non-numeric live value is rejected.
+   */
+  public async increment(key: CacheKey, value: number = 1): Promise<number> {
+    const parsedKey = this.parseKey(key);
+    const t = this.table;
+    const expired = `${t}.expires_at IS NOT NULL AND ${t}.expires_at <= now()`;
+
+    const { rows } = await this.pgClient.query(
+      `/* cache:increment */ INSERT INTO ${t}(key, value, expires_at)
+       VALUES ($1, to_jsonb($2::numeric), now() + make_interval(secs => $3::double precision))
+       ON CONFLICT (key) DO UPDATE
+         SET value = CASE WHEN ${expired} THEN EXCLUDED.value
+                          ELSE to_jsonb((${t}.value #>> '{}')::numeric + $2::numeric) END,
+             expires_at = CASE WHEN ${expired} THEN EXCLUDED.expires_at ELSE ${t}.expires_at END,
+             stale_at = CASE WHEN ${expired} THEN NULL ELSE ${t}.stale_at END
+         WHERE (${expired}) OR jsonb_typeof(${t}.value) = 'number'
+       RETURNING value`,
+      [parsedKey, value, this.ttlToSeconds(this.ttl)],
+    );
+
+    if (rows.length === 0) {
+      throw new Error(`Cannot increment non-numeric value for key: ${parsedKey}`);
+    }
+
+    const newValue = Number(this.decodeJson(rows[0].value));
+
+    await this.emit("set", { key: parsedKey, value: newValue, ttl: this.ttl });
+
+    return newValue;
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * One atomic `DELETE … RETURNING`, so a value is handed out exactly once
+   * across servers. Expired rows count as missing.
+   */
+  public async pull(key: CacheKey): Promise<any | null> {
+    const parsedKey = this.parseKey(key);
+
+    const { rows } = await this.pgClient.query(
+      `/* cache:pull */ DELETE FROM ${this.table}
+       WHERE key = $1 AND (expires_at IS NULL OR expires_at > now())
+       RETURNING value`,
+      [parsedKey],
+    );
+
+    if (rows.length === 0) {
+      await this.emit("miss", { key: parsedKey });
+
+      return null;
+    }
+
+    const value = this.decodeJson(rows[0].value);
+
+    await this.emit("hit", { key: parsedKey, value });
+    await this.emit("removed", { key: parsedKey });
+
+    return value;
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Atomic across servers via optimistic compare-and-set: read the live value,
+   * run `fn`, then write with `UPDATE … WHERE value = <what was read>` (or a
+   * create-only insert for a missing key), retrying when another writer got
+   * there first. `fn` may run more than once under contention; after
+   * {@link PG_UPDATE_MAX_ATTEMPTS} lost races it throws {@link CacheError}.
+   *
+   * Without an explicit `ttl` the row keeps its `expires_at`; a new key gets
+   * the driver default TTL. Returning `null` deletes the key (compare-and-delete).
+   */
+  public async update<T = any>(
+    key: CacheKey,
+    fn: (current: T | null) => T | null | Promise<T | null>,
+    options: { ttl?: CacheTtl } = {},
+  ): Promise<T | null> {
+    const parsedKey = this.parseKey(key);
+    const t = this.table;
+    const live = `(expires_at IS NULL OR expires_at > now())`;
+    const explicitTtl = options.ttl !== undefined ? parseTtl(options.ttl) : undefined;
+
+    for (let attempt = 0; attempt < PG_UPDATE_MAX_ATTEMPTS; attempt++) {
+      const read = await this.pgClient.query(
+        `SELECT value FROM ${t}
+         WHERE key = $1 AND ${live}`,
+        [parsedKey],
+      );
+
+      const exists = read.rows.length > 0;
+      const current = exists ? (this.decodeJson(read.rows[0].value) as T) : null;
+      const expected = exists ? JSON.stringify(current) : null;
+      const result = await fn(current);
+
+      if (result === null) {
+        if (!exists) {
+          return null;
+        }
+
+        const deleted = await this.pgClient.query(
+          `/* cache:cas-delete */ DELETE FROM ${t}
+           WHERE key = $1 AND value = $2::jsonb AND ${live}
+           RETURNING 1`,
+          [parsedKey, expected],
+        );
+
+        if (deleted.rows.length > 0) {
+          await this.emit("removed", { key: parsedKey });
+
+          return null;
+        }
+
+        continue;
+      }
+
+      if (!exists) {
+        const created = (await this.set(key, result, {
+          onConflict: "create",
+          ...(explicitTtl !== undefined ? { ttl: explicitTtl } : {}),
+        })) as CacheSetResult;
+
+        if (created.wasSet) {
+          return result;
+        }
+
+        continue;
+      }
+
+      const params: unknown[] = [parsedKey, JSON.stringify(result), expected];
+      let expirySql = "";
+
+      if (explicitTtl !== undefined) {
+        params.push(this.ttlToSeconds(explicitTtl));
+        expirySql = `, expires_at = now() + make_interval(secs => $4::double precision)`;
+      }
+
+      const updated = await this.pgClient.query(
+        `/* cache:cas-update */ UPDATE ${t}
+         SET value = $2::jsonb, stale_at = NULL${expirySql}
+         WHERE key = $1 AND value = $3::jsonb AND ${live}
+         RETURNING 1`,
+        params,
+      );
+
+      if (updated.rows.length > 0) {
+        await this.emit("set", { key: parsedKey, value: result, ttl: explicitTtl });
+
+        return result;
+      }
+    }
+
+    throw new CacheError(
+      `cache.update(): '${parsedKey}' changed on every attempt (${PG_UPDATE_MAX_ATTEMPTS} tries) — too much write contention.`,
+    );
   }
 
   /**

@@ -219,6 +219,81 @@ export class MockCacheDriver
   }
 
   /**
+   * Live entry for `parsedKey`, or `undefined` when missing / expired (an
+   * expired entry is deleted). Synchronous.
+   */
+  protected liveEntry(parsedKey: string): CacheData | undefined {
+    const entry = this.storage.get(parsedKey);
+
+    if (!entry) {
+      return undefined;
+    }
+
+    if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
+      this.storage.delete(parsedKey);
+
+      return undefined;
+    }
+
+    return entry;
+  }
+
+  /**
+   * Synchronous read-add-write (atomic within the process). Keeps an existing
+   * entry's expiry; a missing key starts from 0 with the default TTL.
+   */
+  public async increment(key: CacheKey, value: number = 1): Promise<number> {
+    const parsedKey = this.parseKey(key);
+
+    this.recordCall("increment", parsedKey, [value]);
+
+    const entry = this.liveEntry(parsedKey);
+    const current = entry ? entry.data : 0;
+
+    if (typeof current !== "number") {
+      throw new Error(`Cannot increment non-numeric value for key: ${parsedKey}`);
+    }
+
+    const newValue = current + value;
+
+    if (entry) {
+      entry.data = newValue;
+    } else {
+      this.storage.set(parsedKey, this.prepareDataForStorage(newValue, this.ttl));
+    }
+
+    await this.emit("set", { key: parsedKey, value: newValue, ttl: this.ttl });
+
+    return newValue;
+  }
+
+  /**
+   * Synchronous read-and-delete: a value is handed out exactly once.
+   */
+  public async pull<T = any>(key: CacheKey): Promise<T | null> {
+    const parsedKey = this.parseKey(key);
+
+    this.recordCall("pull", parsedKey);
+
+    const entry = this.liveEntry(parsedKey);
+
+    if (!entry) {
+      await this.emit("miss", { key: parsedKey });
+
+      return null;
+    }
+
+    this.storage.delete(parsedKey);
+
+    const value = this.cloneValue(entry.data) as T;
+
+    await this.emit("hit", { key: parsedKey, value });
+    await this.emit("removed", { key: parsedKey });
+
+    return value;
+  }
+
+  /**
    * Read the raw {@link CacheData} wrapper from the in-memory `Map`,
    * including `staleAt` metadata. Returns `null` for missing or expired
    * entries — `swr()` consumes this to branch on freshness.

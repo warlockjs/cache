@@ -139,6 +139,78 @@ class FakeRedisClient {
   public async flushAll(): Promise<void> {
     this.store.clear();
     this.expires.clear();
+    this.evalLog = [];
+    this.supportsGetDel = true;
+    this.beforeCas = undefined;
+  }
+
+  /** Every `eval` call, in order (script + keys + arguments). */
+  public evalLog: { script: string; keys: string[]; arguments: string[] }[] = [];
+
+  /** When false, `getDel` is hidden so the driver must use its Lua fallback. */
+  public supportsGetDel = true;
+
+  /** Hook run inside the CAS script before the compare — lets a test simulate a racing writer. */
+  public beforeCas?: (key: string) => void;
+
+  public get getDel(): ((key: string) => Promise<string | null>) | undefined {
+    if (!this.supportsGetDel) return undefined;
+
+    return async (key: string) => {
+      const value = await this.get(key);
+      await this.del(key);
+      return value;
+    };
+  }
+
+  /**
+   * Faithful JS models of the driver's Lua scripts, recognized by content
+   * (the fake is defined before the driver module is imported).
+   */
+  public async eval(
+    script: string,
+    options: { keys: string[]; arguments: string[] },
+  ): Promise<unknown> {
+    this.evalLog.push({ script, keys: options.keys, arguments: options.arguments });
+    const [key] = options.keys;
+    const args = options.arguments;
+
+    if (script.includes("KEEPTTL")) {
+      this.beforeCas?.(key);
+      const current = await this.get(key);
+      const expectMissing = args[2] === "1";
+
+      if (expectMissing ? current !== null : current !== args[0]) {
+        return 0;
+      }
+
+      const ttl = Number(args[3]);
+      this.store.set(key, args[1]);
+
+      if (args[4] === "keep" && !expectMissing) {
+        // KEEPTTL: leave `expires` untouched
+      } else if (ttl > 0) {
+        this.expires.set(key, Date.now() + ttl * 1000);
+      } else {
+        this.expires.delete(key);
+      }
+
+      return 1;
+    }
+
+    if (script.includes("local v = redis.call('GET', KEYS[1])")) {
+      const value = await this.get(key);
+      if (value !== null) await this.del(key);
+      return value;
+    }
+
+    if (script.includes("== ARGV[1] then redis.call('DEL'")) {
+      if ((await this.get(key)) !== args[0]) return 0;
+      await this.del(key);
+      return 1;
+    }
+
+    throw new Error(`FakeRedisClient: unrecognized script:\n${script}`);
   }
 
   public async incrBy(key: string, value: number): Promise<number> {
@@ -776,5 +848,107 @@ describe("RedisCacheDriver — tag invalidation with a globalPrefix", () => {
       await expect(scope.get("k2")).resolves.toBeNull();
       await expect(scope.get("neighbour")).resolves.toBe("n");
     });
+  });
+});
+
+describe("RedisCacheDriver — cross-server atomic ops (wave 2)", () => {
+  beforeAll(async () => {
+    await importDriver();
+  }, 60000);
+
+  beforeEach(async () => {
+    await fakeClient.flushAll();
+  });
+
+  async function makeDriver() {
+    const RedisCacheDriver = await importDriver();
+    const driver = new RedisCacheDriver();
+    driver.setLoggingState(false);
+    driver.setOptions({ url: "redis://localhost" });
+    await driver.connect();
+    return driver;
+  }
+
+  it("pull uses GETDEL and hands the value out once", async () => {
+    const driver = await makeDriver();
+    await driver.set("token", { id: 1 });
+
+    const getDel = vi.spyOn(fakeClient, "getDel", "get");
+
+    await expect(driver.pull("token")).resolves.toEqual({ id: 1 });
+    await expect(driver.pull("token")).resolves.toBeNull();
+    expect(getDel).toHaveBeenCalled();
+    expect(fakeClient.store.has("token")).toBe(false);
+  });
+
+  it("pull falls back to a GET+DEL Lua script when the client has no getDel", async () => {
+    const driver = await makeDriver();
+    fakeClient.supportsGetDel = false;
+    await driver.set("token", "t");
+
+    await expect(driver.pull("token")).resolves.toBe("t");
+    expect(fakeClient.evalLog.some((call) => call.script.includes("redis.call('DEL'"))).toBe(true);
+    expect(fakeClient.store.has("token")).toBe(false);
+  });
+
+  it("update writes through a compare-and-set script and keeps the TTL", async () => {
+    const driver = await makeDriver();
+    await driver.set("n", 1, 120);
+
+    await expect(driver.update<number>("n", (n) => (n ?? 0) + 1)).resolves.toBe(2);
+
+    const cas = fakeClient.evalLog.find((call) => call.script.includes("KEEPTTL"));
+    expect(cas?.arguments).toEqual(["1", "2", "0", "0", "keep"]);
+    expect(await fakeClient.ttl("n")).toBeGreaterThan(0);
+  });
+
+  it("update retries when another server wrote between read and write", async () => {
+    const driver = await makeDriver();
+    await driver.set("n", 1);
+
+    // First CAS attempt: a racing writer bumps the value to 10 first.
+    let raced = false;
+    fakeClient.beforeCas = (key) => {
+      if (!raced) {
+        raced = true;
+        fakeClient.store.set(key, "10");
+      }
+    };
+
+    const fn = vi.fn((n: number | null) => (n ?? 0) + 1);
+
+    await expect(driver.update<number>("n", fn)).resolves.toBe(11);
+    expect(fn).toHaveBeenCalledTimes(2);
+    await expect(driver.get("n")).resolves.toBe(11);
+  });
+
+  it("update on a missing key creates it with the driver default TTL", async () => {
+    const RedisCacheDriver = await importDriver();
+    const driver = new RedisCacheDriver();
+    driver.setLoggingState(false);
+    driver.setOptions({ url: "redis://localhost", ttl: 30 });
+    await driver.connect();
+
+    await expect(driver.update<number>("fresh", () => 5)).resolves.toBe(5);
+
+    const cas = fakeClient.evalLog.find((call) => call.script.includes("KEEPTTL"));
+    expect(cas?.arguments).toEqual(["", "5", "1", "30", ""]);
+    expect(await fakeClient.ttl("fresh")).toBeGreaterThan(0);
+  });
+
+  it("update returning null compare-and-deletes the key", async () => {
+    const driver = await makeDriver();
+    await driver.set("gone", "x");
+
+    await expect(driver.update("gone", () => null)).resolves.toBeNull();
+    expect(fakeClient.store.has("gone")).toBe(false);
+  });
+
+  it("increment keeps an existing TTL (INCRBY never resets it)", async () => {
+    const driver = await makeDriver();
+    await driver.set("hits", 1, 60);
+
+    await expect(driver.increment("hits", 2)).resolves.toBe(3);
+    expect(await fakeClient.ttl("hits")).toBeGreaterThan(0);
   });
 });

@@ -30,6 +30,8 @@ class FakePool implements PgClientLike {
   public queryLog: { text: string; values?: unknown[] }[] = [];
   /** Whether the pgvector extension is "installed" (drives the SELECT FROM pg_extension probe). */
   public pgvectorInstalled = true;
+  /** Hook run inside a compare-and-set UPDATE before the compare — simulates a racing writer. */
+  public beforeCas?: (key: string) => void;
 
   /** TTL seconds (bound param of `now() + make_interval`) → absolute Date. */
   private static secsToDate(secs: number | null): Date | null {
@@ -49,6 +51,68 @@ class FakePool implements PgClientLike {
     this.queryLog.push({ text, values });
     const sql = text.trim();
     const t = this.table;
+
+    const isLive = (row: Row | undefined): row is Row =>
+      row !== undefined && !(row.expires_at && row.expires_at <= new Date());
+
+    // Atomic increment upsert: live numeric row → add, keep expires_at;
+    // missing/expired → start at $2 with the default TTL; live non-number → no row.
+    if (sql.startsWith("/* cache:increment */")) {
+      expect(sql).toContain("ON CONFLICT (key) DO UPDATE");
+      expect(sql).toContain("jsonb_typeof");
+      const [key, amount, ttlSecs] = values as [string, number, number | null];
+      const row = this.store.get(key);
+
+      if (isLive(row)) {
+        if (typeof row.value !== "number") return { rows: [], rowCount: 0 };
+        row.value = row.value + amount;
+        return { rows: [{ value: row.value }], rowCount: 1 };
+      }
+
+      this.store.set(key, {
+        key,
+        value: amount,
+        expires_at: FakePool.secsToDate(ttlSecs),
+        stale_at: null,
+        tags: [],
+      });
+      return { rows: [{ value: amount }], rowCount: 1 };
+    }
+
+    // DELETE … WHERE key = $1 AND live RETURNING value
+    if (sql.startsWith("/* cache:pull */")) {
+      expect(sql).toContain("RETURNING value");
+      const key = values![0] as string;
+      const row = this.store.get(key);
+      if (!isLive(row)) return { rows: [], rowCount: 0 };
+      this.store.delete(key);
+      return { rows: [{ value: row.value }], rowCount: 1 };
+    }
+
+    // Compare-and-set: UPDATE … WHERE key = $1 AND value = $3::jsonb AND live
+    if (sql.startsWith("/* cache:cas-update */")) {
+      const [key, valJson, expectedJson, ttlSecs] = values as [string, string, string, number | null | undefined];
+      this.beforeCas?.(key);
+      const row = this.store.get(key);
+      if (!isLive(row) || JSON.stringify(row.value) !== JSON.stringify(JSON.parse(expectedJson))) {
+        return { rows: [], rowCount: 0 };
+      }
+      row.value = JSON.parse(valJson);
+      row.stale_at = null;
+      if (values!.length > 3) row.expires_at = FakePool.secsToDate(ttlSecs ?? null);
+      return { rows: [{ "?column?": 1 }], rowCount: 1 };
+    }
+
+    // Compare-and-delete: DELETE … WHERE key = $1 AND value = $2::jsonb AND live
+    if (sql.startsWith("/* cache:cas-delete */")) {
+      const [key, expectedJson] = values as [string, string];
+      const row = this.store.get(key);
+      if (!isLive(row) || JSON.stringify(row.value) !== JSON.stringify(JSON.parse(expectedJson))) {
+        return { rows: [], rowCount: 0 };
+      }
+      this.store.delete(key);
+      return { rows: [{ "?column?": 1 }], rowCount: 1 };
+    }
 
     // pgvector extension probe
     if (sql.startsWith("SELECT 1 FROM pg_extension")) {
@@ -894,5 +958,93 @@ describe.each([
     await expect(scope.get("k")).resolves.toBeNull();
     await expect(scope.get("k2")).resolves.toBeNull();
     await expect(scope.get("neighbour")).resolves.toBe("n");
+  });
+});
+
+describe("PgCacheDriver — cross-server atomic ops (wave 2)", () => {
+  let driver: PgCacheDriver;
+  let pool: FakePool;
+
+  beforeEach(async () => {
+    pool = new FakePool();
+    driver = new PgCacheDriver();
+    driver.setOptions({ client: pool });
+    driver.setLoggingState(false);
+    await driver.connect();
+  });
+
+  afterEach(async () => {
+    await driver.disconnect();
+  });
+
+  it("increment is one upsert statement and keeps expires_at", async () => {
+    await driver.set("hits", 1, 60);
+    const before = pool.store.get("hits")!.expires_at;
+
+    await expect(driver.increment("hits", 2)).resolves.toBe(3);
+
+    const statements = pool.queryLog.filter((q) => q.text.includes("cache:increment"));
+    expect(statements).toHaveLength(1);
+    expect(pool.store.get("hits")!.expires_at).toEqual(before);
+  });
+
+  it("increment starts a missing key from the amount", async () => {
+    await expect(driver.increment("fresh", 4)).resolves.toBe(4);
+    await expect(driver.get("fresh")).resolves.toBe(4);
+  });
+
+  it("increment rejects a non-numeric live value", async () => {
+    await driver.set("label", "x");
+    await expect(driver.increment("label")).rejects.toThrow(/Cannot increment/);
+  });
+
+  it("pull is a single DELETE … RETURNING and hands the value out once", async () => {
+    await driver.set("token", { id: 7 });
+
+    await expect(driver.pull("token")).resolves.toEqual({ id: 7 });
+    await expect(driver.pull("token")).resolves.toBeNull();
+    expect(pool.queryLog.filter((q) => q.text.includes("cache:pull"))).toHaveLength(2);
+  });
+
+  it("update compare-and-sets and keeps expires_at", async () => {
+    await driver.set("n", 1, 120);
+    const before = pool.store.get("n")!.expires_at;
+
+    await expect(driver.update<number>("n", (n) => (n ?? 0) + 1)).resolves.toBe(2);
+
+    const cas = pool.queryLog.find((q) => q.text.includes("cache:cas-update"));
+    expect(cas?.text).toContain("value = $3::jsonb");
+    expect(cas?.values).toHaveLength(3); // no explicit ttl → expires_at untouched
+    expect(pool.store.get("n")!.expires_at).toEqual(before);
+  });
+
+  it("update retries when another server wrote between read and write", async () => {
+    await driver.set("n", 1);
+
+    let raced = false;
+    pool.beforeCas = (key) => {
+      if (!raced) {
+        raced = true;
+        pool.store.get(key)!.value = 10;
+      }
+    };
+
+    const fn = vi.fn((n: number | null) => (n ?? 0) + 1);
+
+    await expect(driver.update<number>("n", fn)).resolves.toBe(11);
+    expect(fn).toHaveBeenCalledTimes(2);
+    await expect(driver.get("n")).resolves.toBe(11);
+  });
+
+  it("update on a missing key creates it (create-only insert)", async () => {
+    await expect(driver.update<number>("fresh", () => 5)).resolves.toBe(5);
+    await expect(driver.get("fresh")).resolves.toBe(5);
+  });
+
+  it("update returning null compare-and-deletes", async () => {
+    await driver.set("gone", "x");
+
+    await expect(driver.update("gone", () => null)).resolves.toBeNull();
+    expect(pool.store.has("gone")).toBe(false);
   });
 });

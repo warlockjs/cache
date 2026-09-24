@@ -22,7 +22,7 @@ import type {
   LockOutcome,
   RememberOptions,
 } from "../types";
-import { CacheUnsupportedError } from "../types";
+import { CacheConfigurationError, CacheUnsupportedError } from "../types";
 import {
   normalizeToOptions,
   parseCacheKey,
@@ -330,9 +330,79 @@ export abstract class BaseCacheDriver<
   }
 
   /**
-   * Lock storage for preventing cache stampede
+   * In-flight `remember()` computations, one per parsed key (stampede guard).
    */
-  protected locks: Map<string, Promise<any>> = new Map();
+  protected rememberInFlight: Map<string, Promise<any>> = new Map();
+
+  /**
+   * In-flight `swr()` cold-miss fetches, one per parsed key.
+   */
+  protected swrFetchInFlight: Map<string, Promise<any>> = new Map();
+
+  /**
+   * In-flight `swr()` stale-window background refreshes, one per parsed key.
+   */
+  protected swrRefreshes: Map<string, Promise<void>> = new Map();
+
+  /**
+   * Per-key serialization chains for the in-process read-modify-write
+   * operations (`update`, and the default `increment` / `pull`). Kept apart
+   * from the stampede maps so a `remember()` can never break an update chain,
+   * and never receives an unrelated promise.
+   */
+  protected updateChains: Map<string, Promise<any>> = new Map();
+
+  /**
+   * Run `task` once per key at a time: concurrent callers for the same
+   * `parsedKey` share the in-flight promise registered in `inFlight`.
+   */
+  protected singleFlight<T>(
+    inFlight: Map<string, Promise<any>>,
+    parsedKey: string,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    const existing = inFlight.get(parsedKey);
+
+    if (existing) {
+      return existing as Promise<T>;
+    }
+
+    const promise: Promise<T> = task().finally(() => {
+      if (inFlight.get(parsedKey) === promise) {
+        inFlight.delete(parsedKey);
+      }
+    });
+
+    inFlight.set(parsedKey, promise);
+
+    return promise;
+  }
+
+  /**
+   * Chain `task` after every earlier serialized task for the same key, so
+   * read-modify-write callers in THIS process run one at a time. This is
+   * process-local: it does not coordinate with other servers.
+   */
+  protected runSerialized<T>(parsedKey: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.updateChains.get(parsedKey) ?? Promise.resolve();
+
+    const next = previous.catch(() => undefined).then(task);
+
+    this.updateChains.set(parsedKey, next);
+
+    // Clean up the slot once this link finishes, but only if nobody chained a
+    // follow-up onto it meanwhile. The trailing catch keeps a rejected link
+    // from surfacing as an unhandled rejection here (the caller still sees it).
+    next
+      .finally(() => {
+        if (this.updateChains.get(parsedKey) === next) {
+          this.updateChains.delete(parsedKey);
+        }
+      })
+      .catch(() => undefined);
+
+    return next;
+  }
 
   /**
    * {@inheritdoc}
@@ -349,29 +419,21 @@ export abstract class BaseCacheDriver<
     // blob so there's one path from here on.
     const setOptions = this.normalizeRememberOptions(ttlOrOptions);
 
+    // Only a real miss (`null`) recomputes: cached falsy values such as
+    // `0`, `false` and `""` are returned as-is.
     const cachedValue = await this.get(key);
-    if (cachedValue) {
+
+    if (cachedValue !== null && cachedValue !== undefined) {
       return cachedValue;
     }
 
-    const existingLock = this.locks.get(parsedKey);
-    if (existingLock) {
-      return existingLock;
-    }
+    return this.singleFlight(this.rememberInFlight, parsedKey, async () => {
+      const result = await callback();
 
-    const promise = callback()
-      .then(async (result) => {
-        await this.set(key, result, setOptions);
-        this.locks.delete(parsedKey);
-        return result;
-      })
-      .catch((err) => {
-        this.locks.delete(parsedKey);
-        throw err;
-      });
+      await this.set(key, result, setOptions);
 
-    this.locks.set(parsedKey, promise);
-    return promise;
+      return result;
+    });
   }
 
   /**
@@ -396,8 +458,9 @@ export abstract class BaseCacheDriver<
    *
    * Default implementation: read raw entry, branch on freshness/staleness,
    * trigger background refresh in the stale window, fall through to
-   * `callback` on miss/expiry. Concurrent stale-window callers share a
-   * single in-flight refresh via {@link locks}.
+   * `callback` on miss/expiry. Concurrent cold-miss callers share one fetch
+   * ({@link swrFetchInFlight}); concurrent stale-window callers share one
+   * background refresh ({@link swrRefreshes}).
    *
    * Drivers without a real {@link getEntry} override degrade gracefully —
    * the synthetic entry has no `staleAt`, which the freshness check treats
@@ -425,12 +488,8 @@ export abstract class BaseCacheDriver<
     const isExpired = entry?.expiresAt !== undefined && entry.expiresAt <= now;
 
     if (!entry || isExpired) {
-      return this.swrFetchAndStore<T>(
-        key,
-        options,
-        callback,
-        freshSeconds,
-        staleSeconds,
+      return this.singleFlight(this.swrFetchInFlight, parsedKey, () =>
+        this.swrFetchAndStore<T>(key, options, callback, freshSeconds, staleSeconds),
       );
     }
 
@@ -536,7 +595,7 @@ export abstract class BaseCacheDriver<
     freshSeconds: number,
     staleSeconds: number,
   ): void {
-    if (this.locks.has(parsedKey)) {
+    if (this.swrRefreshes.has(parsedKey)) {
       return;
     }
 
@@ -554,25 +613,34 @@ export abstract class BaseCacheDriver<
         this.logError(`SWR background refresh failed for ${parsedKey}`, error);
         await this.emit("error", { key: parsedKey, error });
       } finally {
-        if (this.locks.get(parsedKey) === refresh) {
-          this.locks.delete(parsedKey);
+        if (this.swrRefreshes.get(parsedKey) === refresh) {
+          this.swrRefreshes.delete(parsedKey);
         }
       }
     })();
 
-    this.locks.set(parsedKey, refresh);
+    this.swrRefreshes.set(parsedKey, refresh);
   }
 
   /**
    * {@inheritdoc}
+   *
+   * Default implementation: get-then-remove, serialized per key in THIS
+   * process. Drivers with a native primitive override it to be atomic across
+   * servers (redis `GETDEL`, pg `DELETE … RETURNING`) or process-atomic
+   * (memory, lru, mock).
    */
   public async pull(key: CacheKey): Promise<any | null> {
-    const value = await this.get(key);
-    if (value !== null) {
-      await this.remove(key);
-    }
-    // Events are emitted by get() and remove() methods
-    return value;
+    return this.runSerialized(this.parseKey(key), async () => {
+      // Events are emitted by get() and remove()
+      const value = await this.get(key);
+
+      if (value !== null) {
+        await this.remove(key);
+      }
+
+      return value;
+    });
   }
 
   /**
@@ -585,19 +653,34 @@ export abstract class BaseCacheDriver<
 
   /**
    * {@inheritdoc}
+   *
+   * Default implementation: read-add-write serialized per key in THIS process,
+   * keeping the entry's remaining TTL (a missing key starts from 0 with the
+   * driver default TTL). Not atomic across servers: drivers with a native
+   * primitive override it (redis `INCRBY`, pg single-statement upsert).
    */
   public async increment(key: CacheKey, value: number = 1): Promise<number> {
-    const current = (await this.get(key)) || 0;
+    const parsedKey = this.parseKey(key);
 
-    if (typeof current !== "number") {
-      throw new Error(
-        `Cannot increment non-numeric value for key: ${this.parseKey(key)}`,
-      );
-    }
+    return this.runSerialized(parsedKey, async () => {
+      const current = await this.get(key);
+      const base = current === null || current === undefined ? 0 : current;
 
-    const newValue = current + value;
-    await this.set(key, newValue);
-    return newValue;
+      if (typeof base !== "number") {
+        throw new Error(`Cannot increment non-numeric value for key: ${parsedKey}`);
+      }
+
+      const newValue = base + value;
+      const remainingTtl = current === null ? undefined : await this.getRemainingTtl(key);
+
+      if (remainingTtl !== undefined) {
+        await this.set(key, newValue, { ttl: remainingTtl });
+      } else {
+        await this.set(key, newValue);
+      }
+
+      return newValue;
+    });
   }
 
   /**
@@ -786,63 +869,44 @@ export abstract class BaseCacheDriver<
   /**
    * {@inheritdoc}
    *
-   * Default implementation: read → transform → write under a per-key in-process
-   * lock. Drivers that can offer stronger semantics (Redis via `WATCH`/`MULTI`)
-   * should override.
+   * Default implementation: read → transform → write, serialized per key in
+   * THIS process only. Drivers that can offer cross-server atomicity (redis,
+   * pg: compare-and-set with retries) override it.
    */
   public async update<T = any>(
     key: CacheKey,
     fn: (current: T | null) => T | null | Promise<T | null>,
     options: { ttl?: CacheTtl } = {},
   ): Promise<T | null> {
-    const parsedKey = this.parseKey(key);
-
     // Chain each update onto the previous one for the same key so concurrent
-    // callers are serialized end-to-end, not merely awakened together when an
-    // earlier lock resolves.
-    const previous = this.locks.get(parsedKey) ?? Promise.resolve();
+    // callers are serialized end-to-end, not merely awakened together.
+    return this.runSerialized(this.parseKey(key), async () => {
+      const current = (await this.get(key)) as T | null;
+      const result = await fn(current);
 
-    const next = previous
-      .catch(() => undefined)
-      .then(async () => {
-        const current = (await this.get(key)) as T | null;
-        const result = await fn(current);
+      if (result === null) {
+        await this.remove(key);
+        return null;
+      }
 
-        if (result === null) {
-          await this.remove(key);
-          return null;
-        }
-
-        if (options.ttl !== undefined) {
-          await this.set(key, result, { ttl: options.ttl });
-
-          return result;
-        }
-
-        // No explicit TTL → preserve the existing entry's remaining lifetime
-        // rather than resetting it to the driver default.
-        const remainingTtl = await this.getRemainingTtl(key);
-
-        if (remainingTtl !== undefined) {
-          await this.set(key, result, { ttl: remainingTtl });
-        } else {
-          await this.set(key, result);
-        }
+      if (options.ttl !== undefined) {
+        await this.set(key, result, { ttl: options.ttl });
 
         return result;
-      });
-
-    this.locks.set(parsedKey, next);
-
-    // Clean up the slot once this link finishes — but only if nobody chained
-    // a follow-up onto it in the meantime.
-    next.finally(() => {
-      if (this.locks.get(parsedKey) === next) {
-        this.locks.delete(parsedKey);
       }
-    });
 
-    return next;
+      // No explicit TTL → preserve the existing entry's remaining lifetime
+      // rather than resetting it to the driver default.
+      const remainingTtl = await this.getRemainingTtl(key);
+
+      if (remainingTtl !== undefined) {
+        await this.set(key, result, { ttl: remainingTtl });
+      } else {
+        await this.set(key, result);
+      }
+
+      return result;
+    });
   }
 
   /**
@@ -883,7 +947,9 @@ export abstract class BaseCacheDriver<
    * The lock value is the resolved `owner` (defaults to `pid.<process.pid>`).
    *
    * Always releases in `finally`, even if `fn` throws — the thrown error
-   * propagates to the caller unchanged.
+   * propagates to the caller unchanged, and a failed release is logged rather
+   * than replacing `fn`'s result or error. The ttl must be finite and
+   * positive; there is no renewal, so it must exceed the worst-case duration.
    */
   public async lock<T>(
     key: CacheKey,
@@ -891,6 +957,16 @@ export abstract class BaseCacheDriver<
     fn: () => Promise<T>,
   ): Promise<LockOutcome<T>> {
     const { ttl, owner } = this.normalizeLockOptions(ttlOrOptions);
+
+    // A lock with no expiry stays held forever if its holder crashes, on every
+    // server. Refuse it up front (parseTtl also rejects undefined / NaN).
+    const ttlSeconds = parseTtl(ttl);
+
+    if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
+      throw new CacheConfigurationError(
+        `cache.lock() requires a finite, positive ttl (got ${String(ttl)}). The ttl must exceed the worst-case duration of the locked work.`,
+      );
+    }
     // The stored value is `<owner>#<token>`: the token makes it unique per
     // acquisition so release can compare-and-delete instead of deleting blindly.
     const lockValue = `${owner ?? `pid.${process.pid}`}#${randomUUID()}`;
@@ -919,8 +995,14 @@ export abstract class BaseCacheDriver<
       return { acquired: true, value };
     } finally {
       // Only delete our own lock — if the TTL expired and a successor
-      // acquired the key, its value differs and it is left alone.
-      await this.deleteIfEquals(key, lockValue);
+      // acquired the key, its value differs and it is left alone. A release
+      // failure (e.g. a Redis blip) is logged, never allowed to replace fn's
+      // outcome: the lock still expires by its TTL.
+      try {
+        await this.deleteIfEquals(key, lockValue);
+      } catch (error) {
+        this.logError(`lock release failed for ${this.parseKey(key)}`, error);
+      }
     }
   }
 

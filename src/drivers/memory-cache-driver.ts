@@ -299,6 +299,70 @@ export class MemoryCacheDriver
 
   /**
    * {@inheritdoc}
+   *
+   * Read, add and write run synchronously (no `await` in between), so
+   * concurrent increments in this process never lose an update. An existing
+   * entry keeps its expiry; a missing key starts from 0 with the default TTL.
+   */
+  public async increment(key: CacheKey, value: number = 1): Promise<number> {
+    const parsedKey = this.parseKey(key);
+    const entry = this.readLive(parsedKey);
+    const current = entry ? entry.data : 0;
+
+    if (typeof current !== "number") {
+      throw new Error(`Cannot increment non-numeric value for key: ${parsedKey}`);
+    }
+
+    const newValue = current + value;
+
+    if (entry) {
+      entry.data = newValue;
+      this.touch(parsedKey, entry);
+    } else {
+      const data = this.prepareDataForStorage(newValue, this.ttl);
+
+      this.entries.set(parsedKey, data);
+
+      if (data.expiresAt !== undefined && Number.isFinite(data.expiresAt)) {
+        this.expiry.set(parsedKey, data.expiresAt);
+      }
+
+      this.enforceMaxSize(parsedKey);
+    }
+
+    await this.emit("set", { key: parsedKey, value: newValue, ttl: entry?.ttl ?? this.ttl });
+
+    return newValue;
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Read and delete run synchronously, so a value is handed out exactly once
+   * even when concurrent callers pull the same key.
+   */
+  public async pull(key: CacheKey): Promise<any | null> {
+    const parsedKey = this.parseKey(key);
+    const entry = this.readLive(parsedKey);
+
+    if (!entry) {
+      await this.emit("miss", { key: parsedKey });
+
+      return null;
+    }
+
+    this.dropEntry(parsedKey);
+
+    const value = cloneValue(entry.data);
+
+    await this.emit("hit", { key: parsedKey, value });
+    await this.emit("removed", { key: parsedKey });
+
+    return value;
+  }
+
+  /**
+   * {@inheritdoc}
    */
   public async get(key: CacheKey) {
     const parsedKey = this.parseKey(key);

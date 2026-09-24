@@ -9,8 +9,8 @@ import type {
   CacheTtl,
   RedisOptions,
 } from "../types";
-import { CacheConfigurationError, CacheUnsupportedError } from "../types";
-import { safeErrorInfo } from "../utils";
+import { CacheConfigurationError, CacheError, CacheUnsupportedError } from "../types";
+import { parseTtl, safeErrorInfo } from "../utils";
 import { BaseCacheDriver } from "./base-cache-driver";
 
 // ============================================================
@@ -59,6 +59,41 @@ loadRedis();
 
 /** KEYS[1]=key, ARGV[1]=expected raw value. 1 when deleted, 0 when not the owner. */
 export const REDIS_COMPARE_DELETE_SCRIPT = `if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('DEL', KEYS[1]) return 1 else return 0 end`;
+
+/**
+ * Compare-and-set used by `update()`.
+ *
+ * KEYS[1]=key; ARGV[1]=expected raw value (ignored when ARGV[3]=='1');
+ * ARGV[2]=new raw value; ARGV[3]='1' when the key is expected to be missing;
+ * ARGV[4]=ttl seconds to apply ('0' = no expiry); ARGV[5]='keep' to keep the
+ * existing TTL instead (only when the key existed).
+ *
+ * Returns 1 when written, 0 when the current value no longer matches.
+ * `KEEPTTL` requires Redis >= 6.
+ */
+export const REDIS_CAS_SET_SCRIPT = `local cur = redis.call('GET', KEYS[1])
+if ARGV[3] == '1' then
+  if cur then return 0 end
+elseif cur ~= ARGV[1] then
+  return 0
+end
+local ttl = tonumber(ARGV[4])
+if ARGV[5] == 'keep' and ARGV[3] ~= '1' then
+  redis.call('SET', KEYS[1], ARGV[2], 'KEEPTTL')
+elseif ttl > 0 then
+  redis.call('SET', KEYS[1], ARGV[2], 'EX', ttl)
+else
+  redis.call('SET', KEYS[1], ARGV[2])
+end
+return 1`;
+
+/** KEYS[1]=key. Fallback for clients without `getDel`: returns the value and deletes it. */
+export const REDIS_GET_DEL_SCRIPT = `local v = redis.call('GET', KEYS[1])
+if v then redis.call('DEL', KEYS[1]) end
+return v`;
+
+/** Compare-and-set attempts before `update()` gives up under contention. */
+const UPDATE_MAX_ATTEMPTS = 10;
 
 /** Keys deleted per UNLINK/DEL while draining a namespace. */
 const REMOVE_BATCH_SIZE = 500;
@@ -498,6 +533,113 @@ export class RedisCacheDriver
 
     this.log("disconnected");
     await this.emit("disconnected");
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Atomic across servers: `GETDEL` (Redis >= 6.2), or an equivalent Lua
+   * script when the client has no `getDel`. A value is handed out once.
+   */
+  public async pull(key: CacheKey): Promise<any | null> {
+    const parsedKey = this.parseKey(key);
+    const client = this.client as any;
+
+    const raw: string | null | undefined =
+      typeof client.getDel === "function"
+        ? await client.getDel(parsedKey)
+        : await client.eval(REDIS_GET_DEL_SCRIPT, { keys: [parsedKey], arguments: [] });
+
+    if (raw === null || raw === undefined) {
+      await this.emit("miss", { key: parsedKey });
+
+      return null;
+    }
+
+    await this.client?.del(this.swrMetaKey(parsedKey));
+
+    const value = JSON.parse(raw);
+
+    await this.emit("hit", { key: parsedKey, value });
+    await this.emit("removed", { key: parsedKey });
+
+    return value;
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Atomic across servers via optimistic compare-and-set: read the raw value,
+   * run `fn`, then write only if the value is still what was read (Lua), and
+   * retry otherwise. `fn` may therefore run more than once under contention;
+   * after {@link UPDATE_MAX_ATTEMPTS} lost races it throws {@link CacheError}.
+   *
+   * Without an explicit `ttl` the existing expiry is kept (`KEEPTTL`); a new
+   * key gets the driver default TTL. Returning `null` deletes the key
+   * (compare-and-delete).
+   */
+  public async update<T = any>(
+    key: CacheKey,
+    fn: (current: T | null) => T | null | Promise<T | null>,
+    options: { ttl?: CacheTtl } = {},
+  ): Promise<T | null> {
+    const parsedKey = this.parseKey(key);
+    const client = this.client as any;
+
+    const explicitTtl = options.ttl !== undefined ? parseTtl(options.ttl) : undefined;
+
+    for (let attempt = 0; attempt < UPDATE_MAX_ATTEMPTS; attempt++) {
+      const raw: string | null = (await client.get(parsedKey)) ?? null;
+      const current = raw === null ? null : (JSON.parse(raw) as T);
+      const result = await fn(current);
+
+      if (result === null) {
+        if (raw === null) {
+          return null;
+        }
+
+        const deleted = await client.eval(REDIS_COMPARE_DELETE_SCRIPT, {
+          keys: [parsedKey],
+          arguments: [raw],
+        });
+
+        if (Number(deleted) === 1) {
+          await this.client?.del(this.swrMetaKey(parsedKey));
+          await this.emit("removed", { key: parsedKey });
+
+          return null;
+        }
+
+        continue;
+      }
+
+      const isNew = raw === null;
+      const ttlSeconds = explicitTtl ?? (isNew ? this.ttl : 0);
+      const keep = explicitTtl === undefined && !isNew;
+
+      const written = await client.eval(REDIS_CAS_SET_SCRIPT, {
+        keys: [parsedKey],
+        arguments: [
+          raw ?? "",
+          JSON.stringify(result),
+          isNew ? "1" : "0",
+          String(Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? ttlSeconds : 0),
+          keep ? "keep" : "",
+        ],
+      });
+
+      if (Number(written) === 1) {
+        // A plain write invalidates any SWR freshness marker.
+        await this.client?.del(this.swrMetaKey(parsedKey));
+        await this.emit("set", { key: parsedKey, value: result, ttl: ttlSeconds });
+
+        return result;
+      }
+    }
+
+    throw new CacheError(
+      `cache.update(): '${parsedKey}' changed on every attempt (${UPDATE_MAX_ATTEMPTS} tries) — too much write contention.`,
+    );
   }
 
   /**

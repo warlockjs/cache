@@ -313,6 +313,94 @@ export class LRUMemoryCacheDriver
   }
 
   /**
+   * Live node for `parsedKey`, or `undefined` when missing / expired (an
+   * expired node is unlinked). Synchronous.
+   */
+  protected liveNode(parsedKey: string): CacheNode | undefined {
+    const node = this.cache.get(parsedKey);
+
+    if (!node) {
+      return undefined;
+    }
+
+    if (node.isExpired) {
+      this.removeNode(node);
+      this.cache.delete(parsedKey);
+
+      return undefined;
+    }
+
+    return node;
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Read, add and write run synchronously (no `await` in between), so
+   * concurrent increments in this process never lose an update. An existing
+   * node keeps its expiry; a missing key starts from 0 with the default TTL.
+   */
+  public async increment(key: CacheKey, value: number = 1): Promise<number> {
+    const parsedKey = this.parseKey(key);
+    const node = this.liveNode(parsedKey);
+    const current = node ? node.value : 0;
+
+    if (typeof current !== "number") {
+      throw new Error(`Cannot increment non-numeric value for key: ${parsedKey}`);
+    }
+
+    const newValue = current + value;
+
+    if (node) {
+      node.value = newValue;
+      this.moveHead(node);
+    } else {
+      const newNode = new CacheNode(parsedKey, newValue, this.ttl);
+
+      this.cache.set(parsedKey, newNode);
+      this.addNode(newNode);
+
+      if (this.cache.size > this.capacity) {
+        this.removeTail();
+      }
+    }
+
+    await this.emit("set", { key: parsedKey, value: newValue, ttl: this.ttl });
+
+    return newValue;
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Read and unlink run synchronously, so a value is handed out exactly once
+   * even when concurrent callers pull the same key.
+   */
+  public async pull(key: CacheKey): Promise<any | null> {
+    const parsedKey = this.parseKey(key);
+    const node = this.liveNode(parsedKey);
+
+    if (!node) {
+      await this.emit("miss", { key: parsedKey });
+
+      return null;
+    }
+
+    this.removeNode(node);
+    this.cache.delete(parsedKey);
+
+    const value =
+      node.value !== null && typeof node.value === "object"
+        ? structuredClone(node.value)
+        : node.value;
+
+    await this.emit("hit", { key: parsedKey, value });
+    await this.emit("removed", { key: parsedKey });
+
+    return value;
+  }
+
+  /**
    * {@inheritdoc}
    */
   public async get(key: CacheKey) {
