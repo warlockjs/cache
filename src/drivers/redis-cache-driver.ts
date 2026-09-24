@@ -54,6 +54,13 @@ async function loadRedis() {
 loadRedis();
 
 // ============================================================
+// Lua scripts (atomic ownership primitives)
+// ============================================================
+
+/** KEYS[1]=key, ARGV[1]=expected raw value. 1 when deleted, 0 when not the owner. */
+export const REDIS_COMPARE_DELETE_SCRIPT = `if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('DEL', KEYS[1]) return 1 else return 0 end`;
+
+// ============================================================
 // RedisCacheDriver Class
 // ============================================================
 
@@ -191,6 +198,31 @@ export class RedisCacheDriver
     }
 
     return value;
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Values are stored as `JSON.stringify(value)`, so the compare runs against
+   * the serialized form inside Lua.
+   */
+  protected async deleteIfEquals(key: CacheKey, expected: unknown): Promise<boolean> {
+    const parsedKey = this.parseKey(key);
+
+    const deleted = await (this.client as any).eval(REDIS_COMPARE_DELETE_SCRIPT, {
+      keys: [parsedKey],
+      arguments: [JSON.stringify(expected)],
+    });
+
+    if (Number(deleted) !== 1) {
+      return false;
+    }
+
+    // Mirror remove(): drop the SWR sidecar and emit the event.
+    await this.client?.del([this.swrMetaKey(parsedKey)]);
+    await this.emit("removed", { key: parsedKey });
+
+    return true;
   }
 
   /**

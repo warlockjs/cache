@@ -156,6 +156,30 @@ export class PgCacheDriver
   }
 
   /**
+   * {@inheritdoc}
+   *
+   * Single `DELETE … WHERE key AND value` — atomic in Postgres.
+   */
+  protected async deleteIfEquals(key: CacheKey, expected: unknown): Promise<boolean> {
+    const parsedKey = this.parseKey(key);
+
+    const res = await this.pgClient.query(
+      `DELETE FROM ${this.table}
+       WHERE key = $1 AND value = $2::jsonb AND (expires_at IS NULL OR expires_at > now())
+       RETURNING 1`,
+      [parsedKey, JSON.stringify(expected)],
+    );
+
+    if (res.rows.length === 0) {
+      return false;
+    }
+
+    await this.emit("removed", { key: parsedKey });
+
+    return true;
+  }
+
+  /**
    * Compute an absolute `expires_at` Date for the given relative TTL in seconds,
    * or `null` when the entry should not expire (`Infinity` / 0 / undefined).
    */

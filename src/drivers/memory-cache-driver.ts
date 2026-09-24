@@ -191,6 +191,24 @@ export class MemoryCacheDriver
 
   /**
    * {@inheritdoc}
+   *
+   * The check and the delete run synchronously (no `await` between them), so
+   * the compare-and-delete is atomic within the process.
+   */
+  protected async deleteIfEquals(key: CacheKey, expected: unknown): Promise<boolean> {
+    const entry: CacheData | undefined = get(this.data, this.parseKey(key));
+
+    if (!entry || (entry.expiresAt && entry.expiresAt < Date.now()) || entry.data !== expected) {
+      return false;
+    }
+
+    await this.remove(key);
+
+    return true;
+  }
+
+  /**
+   * {@inheritdoc}
    */
   public async get(key: CacheKey) {
     const parsedKey = this.parseKey(key);

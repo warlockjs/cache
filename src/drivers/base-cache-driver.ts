@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { log } from "@warlock.js/logger";
 import { MemoryCacheList } from "../list/memory-cache-list";
 import { TaggedCache } from "../tagged-cache";
@@ -890,9 +891,11 @@ export abstract class BaseCacheDriver<
     fn: () => Promise<T>,
   ): Promise<LockOutcome<T>> {
     const { ttl, owner } = this.normalizeLockOptions(ttlOrOptions);
-    const lockOwner = owner ?? `pid.${process.pid}`;
+    // The stored value is `<owner>#<token>`: the token makes it unique per
+    // acquisition so release can compare-and-delete instead of deleting blindly.
+    const lockValue = `${owner ?? `pid.${process.pid}`}#${randomUUID()}`;
 
-    const setResult = (await this.set(key, lockOwner, {
+    const setResult = (await this.set(key, lockValue, {
       onConflict: "create",
       ttl,
     })) as CacheSetResult | unknown;
@@ -915,8 +918,27 @@ export abstract class BaseCacheDriver<
       const value = await fn();
       return { acquired: true, value };
     } finally {
-      await this.remove(key);
+      // Only delete our own lock — if the TTL expired and a successor
+      // acquired the key, its value differs and it is left alone.
+      await this.deleteIfEquals(key, lockValue);
     }
+  }
+
+  /**
+   * Compare-and-delete: remove `key` only when its current value equals
+   * `expected`. Returns whether a delete happened.
+   *
+   * This default is get-then-remove and is NOT atomic across processes; drivers
+   * with a real primitive (memory, redis, pg) override it.
+   */
+  protected async deleteIfEquals(key: CacheKey, expected: unknown): Promise<boolean> {
+    if ((await this.get(key)) !== expected) {
+      return false;
+    }
+
+    await this.remove(key);
+
+    return true;
   }
 
   /**

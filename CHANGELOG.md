@@ -4,6 +4,16 @@ All notable changes to `@warlock.js/cache` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). `@warlock.js/*` packages are released in lockstep — every package shares the same version number, so a version below may list only the changes that affected this package.
 
+## Unreleased (5.20)
+
+### Fixed
+
+- `lock()` no longer deletes a successor's lock after its own TTL expired. Release is now an ownership-checked compare-and-delete (atomic on the memory, Redis and Postgres drivers), so a slow holder can't free a lock that another caller has since acquired.
+
+### Changed
+
+- The stored lock value is now `<owner>#<token>` (a per-acquisition random token is appended to the owner, which still defaults to `pid.<pid>`). Code that reads a lock key directly and compares it to the bare owner string must match the `<owner>#` prefix instead.
+
 ## 5.19.0 - 2026-09-23
 
 ### Changed

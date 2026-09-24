@@ -115,7 +115,7 @@ describe("cache.lock()", () => {
         storedValue = await cache.get("lock.x");
       });
 
-      expect(storedValue).toBe("worker.jobs-2");
+      expect(storedValue).toMatch(/^worker.jobs-2#[0-9a-f-]{36}$/);
     });
   });
 
@@ -145,6 +145,33 @@ describe("cache.lock()", () => {
     it("accepts a duration string for TTL", async () => {
       const outcome = await cache.lock("lock.x", "30s", async () => "done");
       expect(outcome.acquired).toBe(true);
+    });
+  });
+
+  describe("ownership-safe release", () => {
+    it("does not delete a successor's lock after the holder's TTL expired", async () => {
+      const now = Date.now();
+
+      // A holds the lock with a 1s TTL and is still "working" when it expires.
+      const outcome = await cache.lock("lock.x", 1, async () => {
+        vi.spyOn(Date, "now").mockReturnValue(now + 5000);
+
+        // B acquires the now-expired key.
+        const bResult = await cache.set("lock.x", "B-owner", {
+          onConflict: "create",
+          ttl: "1m",
+        });
+        expect(bResult).toMatchObject({ wasSet: true });
+
+        return "a-done";
+      });
+
+      // A finished and ran its release; B's lock must survive it.
+      expect(outcome).toEqual({ acquired: true, value: "a-done" });
+      // On the old unconditional `remove(key)` this is null, so this assertion fails.
+      await expect(cache.get("lock.x")).resolves.toBe("B-owner");
+
+      vi.restoreAllMocks();
     });
   });
 
