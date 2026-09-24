@@ -25,7 +25,15 @@ await cache.lock(key, ttl, fn);
 await cache.lock(key, { ttl, owner?, driver? }, fn);
 ```
 
-**TTL is required.** Forgotten locks stay forever if the process crashes; the TTL is your safety net.
+**TTL is required, finite and positive.** `0`, `Infinity`, negative, `NaN` and unparseable TTLs throw `CacheConfigurationError` before anything is written. A lock with no expiry blocks every server once its holder crashes.
+
+TTL rules: a number or a bare numeric string (`"90"`) is **seconds**; `"500ms"` and `0.5` round up to 1 s. There is no renewal or fencing, so the TTL must exceed the worst-case duration of `fn`.
+
+## Lock value and release
+
+- The stored value is `<owner>#<token>` (owner defaults to `pid.<pid>`; the token is random per acquisition). Match on the `<owner>#` prefix, never the bare owner.
+- Release is a compare-and-delete (atomic on memory, redis, pg): if your TTL expired and a successor acquired the key, your release leaves their lock alone.
+- A release error is logged and never replaces `fn`'s result or error.
 
 ## Return shape — discriminated union
 
@@ -91,14 +99,15 @@ await cache.lock(
 
 | Driver | Cross-process safe? |
 |--------|:-:|
-| `redis` | ✅ Native `SET … NX EX` |
-| `memory` / `memoryExtended` / `lru` | ❌ In-process only |
-| `file` | ⚠️ Single-host only (races across hosts) |
+| `redis` | ✅ Native `SET … NX EX`, Lua release |
+| `pg` | ✅ `INSERT … ON CONFLICT`, one-statement release |
+| `memory` / `memoryExtended` / `lru` | ❌ In-process only (exclusive within the process) |
+| `file` | ⚠️ Single-host only (exclusive create) |
 | `null` | n/a — always "acquires" |
 
 ## Gotchas
 
 - **Non-re-entrant in v1.** A recursive call for the same key gets `{ acquired: false }`.
 - **Don't release inside `fn`.** `lock()` handles release in `finally`. Manual `cache.remove(lockKey)` inside `fn` would let another process jump in mid-work.
-- **TTL shorter than `fn` runtime = race.** Pick a TTL with generous margin.
-- **Cross-server requires Redis.** Memory / LRU drivers don't coordinate across processes.
+- **TTL shorter than `fn` runtime = race.** Pick a TTL with generous margin; there is no renewal.
+- **Cross-server requires `redis` or `pg`.** Memory / LRU / file drivers don't coordinate across servers.

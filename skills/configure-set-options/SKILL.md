@@ -37,6 +37,12 @@ await cache.set("user:1", user, {
 | `driver` | `string` | Per-call driver override by registered name. |
 | `vector` | `number[]` | Embedding indexed alongside the entry for [`cache.similar()`](@warlock.js/cache/use-cache-similarity/SKILL.md). Drivers without similarity support throw `CacheUnsupportedError`. |
 
+## TTL parsing
+
+- Number or bare numeric string (`"3600"`) = **seconds**. Fractions and sub-second values (`0.5`, `"500ms"`) round **up** to whole seconds, never 0.
+- `0` / `Infinity` = no expiry. `NaN`, negative and unparseable values throw `CacheConfigurationError`.
+- `cache.lock()` refuses any TTL that never expires.
+
 ## `onConflict` policies
 
 Self-documenting enum; Redis maps these to `NX` / `XX` natively, others emulate.

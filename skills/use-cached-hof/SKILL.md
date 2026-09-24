@@ -41,11 +41,12 @@ cached(fn, {
 | Args | Key |
 |------|-----|
 | None | `prefix` |
-| All primitives (incl. `null` / `undefined` / `bigint`) | `prefix.` + args joined with dots |
-| Any object / array arg | `prefix.` + `JSON.stringify(args)` |
-| Unserializable (circular / `BigInt` nested in object) | throws `CacheConfigurationError` |
+| Any args | `prefix.<16 hex>` — sha1 of a stable JSON encoding of the args, truncated |
+| `Map` / `Set` / function / symbol / class instance / circular | throws `CacheConfigurationError` |
 
-Footguns: order matters (`fn(1, 2)` and `fn(2, 1)` differ), `Date` → ISO string, `Map` / `Set` → `{}` (use the options form). When auto-key fails, use the options form with a custom `key` fn.
+The hash keeps distinct args on distinct keys (`("1.private", "")` ≠ `("1", "private")`). Object keys are sorted; `Date` → ISO string; order of args matters. Never build keys by hand: call `.invalidate(...args)`, which honours `config.driver`. When auto-key fails, use the options form with a custom `key` fn.
+
+**Upgrade (5.20):** the key format changed from dot-joined args, so old entries are never read and every call misses once.
 
 ## Return shape
 
@@ -97,6 +98,6 @@ const getCategoryMeta = cached(
 
 ## Things NOT to do
 
-- Don't wrap a function that has non-JSON-serializable args with the shorthand form. Use the options form and project a stable subset into the key.
+- Don't wrap a function whose args include `Map`, `Set` or class instances with the shorthand form (it throws). Use the options form and project a stable subset into the key.
 - Don't rely on cross-process stampede safety. `cached` inherits `remember`'s in-process lock; cross-process needs a distributed lock via `onConflict: "create"`.
 - Don't include secrets in args — they'd land in cache keys. Project only the identifying fields into the key.

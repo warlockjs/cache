@@ -23,28 +23,20 @@ const left = await cache.decrement(`stock.${sku}`, 3);       // -3
 
 ## Atomicity is per-driver
 
-| Driver | Guarantee |
-|---|---|
-| `redis` | Native `INCRBY` / `DECRBY` — atomic **across processes/nodes** |
-| memory family / `file` / `pg` | Read-modify-write — atomic **within one process** only |
+`increment`, `decrement`, `pull` and `update` are atomic, but only some drivers are atomic **across servers**:
 
-For a counter that multiple instances bump concurrently (a global rate limit, a
-shared tally), use the [`redis`](@warlock.js/cache/pick-cache-driver/SKILL.md)
-driver. In-memory counters are fine for single-node work.
+| Driver | `increment` / `decrement` | `pull` | `update` / `merge` |
+|---|---|---|---|
+| `redis` | cross-server (`INCRBY`) | cross-server (`GETDEL`) | cross-server (Lua compare-and-set, retries) |
+| `pg` | cross-server (one upsert) | cross-server (`DELETE … RETURNING`) | cross-server (compare-and-set, retries) |
+| `memory` / `memoryExtended` / `lru` / `mock` | one process | one process | one process |
+| `file` | one process | one process | not supported (throws) |
 
-## TTL behavior differs too
+Use `redis` or `pg` for anything several servers touch (rate limits, login throttles, one-time tokens); memory is per-process. On redis/pg the `update` callback may run more than once under contention: keep it side-effect free.
 
-This is the gotcha to remember:
+## TTL is kept
 
-- **Redis** `INCRBY` **preserves** the key's existing TTL.
-- **Memory-family / pg** write the new value through `set()` with the driver's
-  **default** TTL — they do **not** carry over the previous entry's remaining TTL.
-
-So if you need a counter that expires (a fixed window), set the TTL explicitly
-when you create it and don't rely on `increment` to keep a window alive on the
-in-memory drivers. For a value that should keep its TTL across edits, reach for
-[`cache.update`](@warlock.js/cache/use-cache-update-merge/SKILL.md), which
-preserves the remaining TTL.
+Every driver keeps the key's **remaining TTL** across `increment`/`decrement`, so a fixed-window counter can't turn permanent. Set the TTL when you create the counter (`cache.set(key, 0, "1m")`, then `increment`). Use [`cache.update`](@warlock.js/cache/use-cache-update-merge/SKILL.md) for objects.
 
 ## Common shapes
 

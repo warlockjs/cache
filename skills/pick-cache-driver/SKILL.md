@@ -22,15 +22,21 @@ Seven production drivers + a mock driver ship in-box. Pick by durability, scope,
 | Capability | null | memory | memoryExt | lru | file | redis | pg |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
 | `set` / `get` / `remove` / `flush` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| TTL (number or string) | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| TTL (number or string; numeric strings = seconds) | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Sliding TTL on read | — | — | ✓ | — | — | — | — |
 | `removeNamespace` | noop | ✓ | ✓ | ✓ (prefix-scan) | ✓ | ✓ | ✓ (LIKE prefix) |
 | `onConflict: "create"` / `"update"` | noop | emulated | emulated | emulated | emulated | native `NX`/`XX` | native (INSERT ON CONFLICT) |
-| Native increment / decrement | — | ✓ | ✓ | ✓ | ✓ | atomic `INCRBY`/`DECRBY` | ✓ |
-| `update()` / `merge()` | ✓ | ✓ | ✓ | ✓ | ✗ throws | ✓ (single-process safety only today) | ✓ |
+| `increment` / `decrement` / `pull` | — | one process | one process | one process | one process | **cross-server** | **cross-server** |
+| `update()` / `merge()` | ✓ | one process | one process | one process | ✗ throws | **cross-server** (compare-and-set) | **cross-server** (compare-and-set) |
 | List sub-API | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (O(n) JSON blob today; native LPUSH/LRANGE in v2.1) | ✓ |
-| Tagged invalidation | noop | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (native GIN(tags)) |
+| Tagged invalidation | noop | ✓ | ✓ | ✓ | ✓ (serialized index) | ✓ (native SET) | ✓ (JSON-array merge) |
 | `similar()` / `set({ vector })` | returns `[]` / noop | ✓ brute force | ✓ brute force | ✓ brute force | ✗ throws | ✗ throws (Phase 2 backlog) | ✓ (with `vector` config — pgvector) |
+
+## Multi-server: use redis or pg
+
+Memory, memoryExtended, lru and file caches are **per-process** (file: per host). With more than one server, use `redis` or `pg` for counters, throttles, one-time tokens (`pull`), shared `update`, `lock()` and tag invalidation; on memory each server counts and invalidates alone. `remember()`/`swr()`/`cached()` stampede protection is per process even on redis. Redis Cluster is unsupported.
+
+Driver storage notes: `memory` stores flat keys (`get("users")` after `set("users.1")` is a miss) and `maxSize` counts entries in LRU order; redis `flush()` without a `globalPrefix` runs `FLUSHDB` (whole database), so set a prefix.
 
 ## Global config TTL — accepts number or string
 

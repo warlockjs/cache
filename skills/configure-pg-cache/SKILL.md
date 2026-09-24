@@ -13,14 +13,15 @@ Persistent cache backed by your existing Postgres pool. Two modes: **KV-only** (
 2. **`pg` is an optional peer dep.** Lazy-loaded; install only if you use this driver.
 3. **No auto-migration.** Driver exposes `driver.schema()` returning a DDL string — caller runs it via their own migration tool.
 4. **Table name is regex-validated** (`[A-Za-z_][A-Za-z0-9_]*`) before DDL interpolation. No SQL injection via misconfiguration.
-5. **TTL is lazy on read.** `SELECT ... WHERE expires_at IS NULL OR expires_at > now()`. Expired rows aren't auto-deleted unless you GC them yourself.
+5. **TTL is lazy on read.** `SELECT ... WHERE expires_at IS NULL OR expires_at > now()`. Expiry is computed on the DB clock. `driver.prune(limit = 1000)` deletes expired rows in batches and returns the count; `set()` also runs it on about 1 in 200 writes. Call it from a scheduled job for unique-key workloads.
 6. **`onConflict` is race-safe at the SQL layer:**
    - `create` → `INSERT ... ON CONFLICT DO UPDATE WHERE expires_at < now() RETURNING value` (reclaims expired rows; blocks live ones).
    - `update` → `UPDATE ... WHERE expires_at IS NULL OR expires_at > now() RETURNING value`.
    - `upsert` → unconditional `INSERT ... ON CONFLICT DO UPDATE`.
-7. **`stale_at TIMESTAMPTZ` column** powers [stale-while-revalidate](@warlock.js/cache/use-swr/SKILL.md) — `cache.swr(...)` populates it on writes, plain `set()` leaves it null (always-fresh). Provision via `driver.schema()` like any other column.
-8. **pgvector requires `CREATE EXTENSION vector;` once on the database.** Lazy probe on first vector op throws `CacheConfigurationError` if missing; result is cached.
-9. **Vectors are passed as text literals** (`'[1,2,3]'::vector`). No binary protocol dependency — works against any pg client.
+7. **Atomic ops are cross-server:** `increment` is one upsert that keeps `expires_at`, `pull` is `DELETE … RETURNING`, `update` is a compare-and-set with bounded retries (callback may run more than once). Tags use a one-statement JSON-array merge.
+8. **`stale_at TIMESTAMPTZ` column** powers [stale-while-revalidate](@warlock.js/cache/use-swr/SKILL.md) — `cache.swr(...)` populates it on writes, plain `set()` leaves it null (always-fresh). Provision via `driver.schema()` like any other column.
+9. **pgvector requires `CREATE EXTENSION vector;` once on the database.** Lazy probe on first vector op throws `CacheConfigurationError` if missing; result is cached.
+10. **Vectors are passed as text literals** (`'[1,2,3]'::vector`). No binary protocol dependency — works against any pg client.
 
 ## Configuration
 

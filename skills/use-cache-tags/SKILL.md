@@ -51,9 +51,12 @@ Subsequent `set("user:1", ...)` with **no** `tags` leaves previous associations 
 | Driver | Tag invalidation |
 | --- | :-: |
 | `null` | noop |
-| `memory` / `memoryExtended` / `lru` / `file` | ✓ (reverse index in driver state) |
-| `redis` | ✓ |
-| `pg` | ✓ native via `GIN(tags)` index |
+| `memory` / `memoryExtended` / `lru` | ✓ (separate index store; eviction and expiry never touch it) |
+| `file` | ✓ (serialized index) |
+| `redis` | ✓ (native SET inside the prefix) |
+| `pg` | ✓ (JSON-array merge on the index row) |
+
+The index uses driver primitives (`tagAdd` / `tagMembers` / `tagRemove`), so concurrent tagged writes never drop members. It stores un-prefixed keys, `invalidate()` deletes exactly the members it read, writes prune up to 20 dead members, and `remove()` / `pull()` detach the key. Tags are global across scopes. Across servers, use `redis` or `pg` so every server shares one index.
 
 ## SWR with tags
 

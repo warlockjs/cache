@@ -17,7 +17,8 @@ const user = await cache.remember(`user:${id}`, "1h", async () => {
 
 - The callback runs once per miss.
 - Concurrent callers for the same key share the in-flight promise (stampede protection) — within one Node process.
-- `null` is the universal miss sentinel. `remember` short-circuits on a **truthy** cached value (`if (cachedValue) return cachedValue;`), so a stored `null` reads back as a miss and the callback **re-runs on every call** — you get no caching at all, plus a wasted write each time. To actually cache a "not found," store a truthy sentinel instead (see negative caching below).
+- `null` is the only miss. `0`, `false` and `""` are cached like any other value, so `remember` doesn't recompute them. A callback returning `null` is not cached, so the callback re-runs on the next call: to cache a "not found," store a sentinel (see negative caching below).
+- Stampede protection is per process, even on redis. To run something once across servers, wrap it in `cache.lock()` on `redis` or `pg`.
 
 ## Cross-process stampede protection — distributed lock via `onConflict`
 
@@ -61,7 +62,7 @@ if (user?.__miss) {
 }
 ```
 
-Don't return raw `null` inside `remember` to "cache the miss" — it won't. `remember`'s truthy guard treats a stored `null` as a miss, so the callback re-runs every time and the origin still gets hammered. The truthy `{ __miss: true }` sentinel is what actually skips the next call.
+Don't return raw `null` inside `remember` to "cache the miss": `null` is the miss sentinel, so the callback re-runs every time and the origin still gets hammered. The `{ __miss: true }` sentinel is what skips the next call.
 
 ## Per-tenant caching
 
