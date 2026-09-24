@@ -149,16 +149,14 @@ class FakeRedisClient {
   public async *scanIterator(options?: {
     MATCH?: string;
     COUNT?: number;
-  }): AsyncGenerator<string> {
+  }): AsyncGenerator<string[]> {
     const pattern = options?.MATCH ?? "*";
     const regex = globToRegExp(pattern);
     const matches = [...this.store.keys(), ...this.sets.keys()].filter((k) => regex.test(k));
     const batchSize = options?.COUNT ?? 10;
 
     for (let i = 0; i < matches.length; i += batchSize) {
-      for (const key of matches.slice(i, i + batchSize)) {
-        yield key;
-      }
+      yield matches.slice(i, i + batchSize);
     }
   }
 
@@ -586,6 +584,31 @@ describe("RedisCacheDriver", () => {
     expect(deleted).toBeDefined();
     expect(deleted!.length).toBe(25);
     expect(fakeClient.store.size).toBe(0);
+  });
+
+  it("removeNamespace accepts legacy single-key scan iterator results", async () => {
+    const RedisCacheDriver = await importDriver();
+    const driver = new RedisCacheDriver();
+    driver.setLoggingState(false);
+    driver.setOptions({ url: "redis://localhost" });
+    await driver.connect();
+
+    await driver.set("legacy.one", 1);
+    await driver.set("legacy.two", 2);
+    const batches = fakeClient.scanIterator.bind(fakeClient);
+    vi.spyOn(fakeClient, "scanIterator").mockImplementation((async function* (options: {
+      MATCH?: string;
+      COUNT?: number;
+    }) {
+      for await (const batch of batches(options)) {
+        for (const key of batch) yield key;
+      }
+    }) as never);
+
+    await expect(driver.removeNamespace("legacy")).resolves.toEqual([
+      "legacy.one",
+      "legacy.two",
+    ]);
   });
 
   it("increment and decrement use native INCRBY/DECRBY", async () => {

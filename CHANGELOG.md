@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Two concurrent `lock()` calls in one process could both acquire the lock on the memory, mock and file drivers. `onConflict: "create"` is now a synchronous check-and-insert on memory and an exclusive create on file.
 - Redis `flush()` without a prefix no longer wipes every database on the server (queues, sessions, other apps).
 - Redis `removeNamespace("users")` also deleted `users2.*` and `usersettings.*`, and flushing tenant `app` also deleted `app2.*` and `apple.*`. It now matches `ns` and `ns.*` only, in batched `UNLINK` calls rather than one giant `DEL`.
+- Redis 5 `scanIterator()` batches keys per cursor response. `removeNamespace()` now flattens those batches before deleting them, while retaining compatibility with older clients that yield one key at a time.
 - Redis SWR metadata now lives inside the namespace, so `flush()` clears it, and a plain `set` clears it, so a stale `staleAt` no longer poisons later reads.
 - A failed Redis `connect()` is rethrown and can be retried; it used to be logged, swallowed and never retried.
 - `increment()`/`decrement()` dropped the key's TTL on non-Redis drivers, so rate-limit counters could become permanent and block an IP forever. The remaining TTL is now kept.

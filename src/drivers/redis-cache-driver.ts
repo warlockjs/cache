@@ -157,16 +157,23 @@ export class RedisCacheDriver
       // scanning so memory stays bounded on large keyspaces.
       let batch: string[] = [];
 
-      for await (const key of this.client.scanIterator({
+      for await (const scanned of this.client.scanIterator({
         MATCH: pattern,
         COUNT: 100,
       })) {
-        batch.push(key as unknown as string);
+        // node-redis 5 yields a batch of keys for each SCAN cursor response;
+        // older supported clients yielded one key at a time. Normalize both
+        // forms before passing keys to the command parser.
+        const keys = Array.isArray(scanned) ? scanned : [scanned];
 
-        if (batch.length >= REMOVE_BATCH_SIZE) {
-          await this.deleteKeys(batch);
-          deleted.push(...batch);
-          batch = [];
+        for (const key of keys) {
+          batch.push(key as unknown as string);
+
+          if (batch.length >= REMOVE_BATCH_SIZE) {
+            await this.deleteKeys(batch);
+            deleted.push(...batch);
+            batch = [];
+          }
         }
       }
 
