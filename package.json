@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@warlock.js/fs": "workspace:^",
-    "@mongez/reinforcements": "^4.0.1",
+    "@mongez/reinforcements": "^4.0.2",
     "@warlock.js/logger": "workspace:^",
     "ms": "^2.1.3"
   },
