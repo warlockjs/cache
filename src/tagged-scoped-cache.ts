@@ -94,18 +94,43 @@ export class TaggedScopedCache implements TaggedScopedCacheContract {
   }
 
   /**
-   * Remove the scoped key. The tag-index entry will eventually be cleaned up
-   * by `invalidate()`; we don't proactively rewrite it here for cost reasons.
+   * Remove the scoped key and take it out of every tag index this handle
+   * writes to (scope tags + handle tags).
    */
-  public remove(key: CacheKey): Promise<void> {
-    return this.scope.remove(key);
+  public async remove(key: CacheKey): Promise<void> {
+    await this.scope.remove(key);
+    await this.detachFromTags(key);
   }
 
   /**
-   * Read-and-remove the scoped key.
+   * Read-and-remove the scoped key, then take it out of this handle's tags.
    */
-  public pull<T = any>(key: CacheKey): Promise<T | null> {
-    return this.scope.pull<T>(key);
+  public async pull<T = any>(key: CacheKey): Promise<T | null> {
+    const value = await this.scope.pull<T>(key);
+
+    if (value !== null) {
+      await this.detachFromTags(key);
+    }
+
+    return value;
+  }
+
+  /**
+   * Remove the un-prefixed scoped key from every tag index of this handle.
+   */
+  protected async detachFromTags(key: CacheKey): Promise<void> {
+    const allTags = mergeTagSets(this.scope.defaults.tags, this.handleTags);
+
+    if (!allTags || allTags.length === 0) {
+      return;
+    }
+
+    const scopedKey = this.buildScopedKey(key);
+    const tagged = this.scope.source.tags(allTags) as unknown as {
+      detachFromTags: (indexedKey: string) => Promise<void>;
+    };
+
+    await tagged.detachFromTags(parseCacheKey(scopedKey));
   }
 
   /**

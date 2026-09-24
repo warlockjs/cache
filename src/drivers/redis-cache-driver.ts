@@ -200,6 +200,99 @@ export class RedisCacheDriver
     return Number(await client.del(keys)) || 0;
   }
 
+  // ============================================================
+  // Tag index — a native Redis SET per tag
+  // ============================================================
+
+  /**
+   * {@inheritdoc}
+   *
+   * `SADD` — atomic across servers, so concurrent tagged writes on any number
+   * of instances never drop a member. The set key lives inside the prefix
+   * namespace, so `flush()` / `removeNamespace()` sweep it too.
+   */
+  public async tagAdd(tagKey: CacheKey, members: string[]): Promise<void> {
+    if (members.length === 0) {
+      return;
+    }
+
+    const parsedKey = this.parseKey(tagKey);
+
+    await this.withTagSet(parsedKey, (client) => client.sAdd(parsedKey, members));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async tagMembers(tagKey: CacheKey): Promise<string[]> {
+    const parsedKey = this.parseKey(tagKey);
+
+    return this.withTagSet(parsedKey, async (client) => (await client.sMembers(parsedKey)) ?? []);
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * `SREM` — Redis drops the set once its last member is removed.
+   */
+  public async tagRemove(tagKey: CacheKey, members: string[]): Promise<void> {
+    if (members.length === 0) {
+      return;
+    }
+
+    const parsedKey = this.parseKey(tagKey);
+
+    await this.withTagSet(parsedKey, (client) => client.sRem(parsedKey, members));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async tagDelete(tagKey: CacheKey): Promise<void> {
+    await this.client?.del(this.parseKey(tagKey));
+  }
+
+  /**
+   * Run a SET command against a tag key, upgrading a pre-5.20 index first.
+   *
+   * Earlier versions stored the index as a JSON-array STRING under the same
+   * key, which makes any SET command fail with `WRONGTYPE`. On that error the
+   * legacy array is read, the string deleted, its members re-added with
+   * `SADD`, and the command retried once.
+   */
+  protected async withTagSet<T>(parsedKey: string, run: (client: any) => Promise<T>): Promise<T> {
+    const client = this.client as any;
+
+    try {
+      return await run(client);
+    } catch (error) {
+      if (!/WRONGTYPE/i.test(String((error as Error)?.message ?? error))) {
+        throw error;
+      }
+
+      const raw: string | null = await client.get(parsedKey);
+      let legacy: unknown = [];
+
+      try {
+        legacy = raw === null ? [] : JSON.parse(raw);
+      } catch {
+        legacy = [];
+      }
+
+      await client.del(parsedKey);
+
+      const members = Array.isArray(legacy)
+        ? legacy.filter((member): member is string => typeof member === "string")
+        : [];
+
+      if (members.length > 0) {
+        await client.sAdd(parsedKey, members);
+      }
+
+      return run(client);
+    }
+  }
+
   /**
    * {@inheritDoc}
    */

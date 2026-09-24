@@ -983,6 +983,30 @@ export interface CacheDriver<ClientType, Options> {
    */
   tags(tags: string[]): TaggedCacheDriver;
   /**
+   * Tag-index primitive: add `members` (normalized, un-prefixed cache keys)
+   * to the index stored under `tagKey`. Optional — `TaggedCache` falls back to
+   * a get/set array when a driver has none.
+   *
+   * Built-in drivers: redis → a native SET (`SADD`, atomic across servers);
+   * pg → one atomic upsert of a JSON array row; memory / lru / mock → an
+   * in-process set that is never evicted or expired; file (base default) →
+   * a get/set array serialized per tag key in this process only.
+   */
+  tagAdd?(tagKey: CacheKey, members: string[]): Promise<void>;
+  /**
+   * Tag-index primitive: the members stored under `tagKey` (empty when none).
+   */
+  tagMembers?(tagKey: CacheKey): Promise<string[]>;
+  /**
+   * Tag-index primitive: remove `members` from `tagKey`. Members added
+   * concurrently and not listed are kept.
+   */
+  tagRemove?(tagKey: CacheKey, members: string[]): Promise<void>;
+  /**
+   * Tag-index primitive: drop the whole index stored under `tagKey`.
+   */
+  tagDelete?(tagKey: CacheKey): Promise<void>;
+  /**
    * Similarity retrieval. Returns the nearest stored entries to `vector` by
    * cosine similarity, ordered by descending score.
    *

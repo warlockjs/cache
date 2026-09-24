@@ -279,14 +279,100 @@ export abstract class BaseCacheDriver<
 
     const allKeys = new Set<string>();
     for (const tag of tags) {
-      const tagKey = `cache:tags:${tag}`;
-      const keys = ((await this.get(tagKey)) as string[] | null) || [];
+      const keys = await this.tagMembers(`cache:tags:${tag}`);
       for (const k of keys) {
         allKeys.add(this.parseKey(k));
       }
     }
 
     return allKeys;
+  }
+
+  // ============================================================
+  // Tag index primitives
+  // ============================================================
+
+  /**
+   * {@inheritdoc}
+   *
+   * Default implementation: the index is an ordinary entry holding a string
+   * array, read-modified-written under {@link runSerialized} — correct within
+   * THIS process only. Drivers with a native primitive override it (redis SET,
+   * pg atomic upsert, the in-process drivers' {@link InMemoryTagIndex}).
+   */
+  public async tagAdd(tagKey: CacheKey, members: string[]): Promise<void> {
+    if (members.length === 0) {
+      return;
+    }
+
+    await this.runSerialized(this.parseKey(tagKey), async () => {
+      const current = await this.readTagArray(tagKey);
+      const merged = new Set(current);
+
+      for (const member of members) {
+        merged.add(member);
+      }
+
+      if (merged.size !== current.length) {
+        await this.set(tagKey, [...merged], Infinity);
+      }
+    });
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async tagMembers(tagKey: CacheKey): Promise<string[]> {
+    return this.readTagArray(tagKey);
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Default implementation: serialized read-filter-write (process-local); an
+   * emptied index is removed.
+   */
+  public async tagRemove(tagKey: CacheKey, members: string[]): Promise<void> {
+    if (members.length === 0) {
+      return;
+    }
+
+    await this.runSerialized(this.parseKey(tagKey), async () => {
+      const current = await this.readTagArray(tagKey);
+      const dropped = new Set(members);
+      const kept = current.filter((member) => !dropped.has(member));
+
+      if (kept.length === current.length) {
+        return;
+      }
+
+      if (kept.length === 0) {
+        await this.remove(tagKey);
+      } else {
+        await this.set(tagKey, kept, Infinity);
+      }
+    });
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async tagDelete(tagKey: CacheKey): Promise<void> {
+    await this.runSerialized(this.parseKey(tagKey), () => this.remove(tagKey));
+  }
+
+  /**
+   * The index stored as a plain entry, or `[]`. Non-string members (a corrupted
+   * or foreign value) are ignored rather than trusted.
+   */
+  protected async readTagArray(tagKey: CacheKey): Promise<string[]> {
+    const value = await this.get(tagKey);
+
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.filter((member): member is string => typeof member === "string");
   }
 
   /**

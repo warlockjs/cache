@@ -175,7 +175,7 @@ describe("cache.namespace — scope tags", () => {
     await feed.set("home", "data");
 
     // The tag-index entry should include the scoped key
-    const tagged = await cache.get("cache.tags.user.42");
+    const tagged = await cache.currentDriver!.tagMembers!("cache:tags:user.42");
     expect(tagged).toContain("feed.42.home");
   });
 
@@ -183,8 +183,8 @@ describe("cache.namespace — scope tags", () => {
     const feed = cache.namespace("feed.42", { tags: ["user.42"] });
     await feed.set("ads", "data", { tags: ["sponsored"] });
 
-    const userTagged = (await cache.get("cache.tags.user.42")) as string[];
-    const sponsoredTagged = (await cache.get("cache.tags.sponsored")) as string[];
+    const userTagged = (await cache.currentDriver!.tagMembers!("cache:tags:user.42")) as string[];
+    const sponsoredTagged = (await cache.currentDriver!.tagMembers!("cache:tags:sponsored")) as string[];
     expect(userTagged).toContain("feed.42.ads");
     expect(sponsoredTagged).toContain("feed.42.ads");
   });
@@ -194,8 +194,8 @@ describe("cache.namespace — scope tags", () => {
     const sponsored = feed.namespace("sponsored", { tags: ["ads"] });
     await sponsored.set("home", "data");
 
-    const userTagged = (await cache.get("cache.tags.user.42")) as string[];
-    const adsTagged = (await cache.get("cache.tags.ads")) as string[];
+    const userTagged = (await cache.currentDriver!.tagMembers!("cache:tags:user.42")) as string[];
+    const adsTagged = (await cache.currentDriver!.tagMembers!("cache:tags:ads")) as string[];
     expect(userTagged).toContain("feed.42.sponsored.home");
     expect(adsTagged).toContain("feed.42.sponsored.home");
   });
@@ -205,7 +205,7 @@ describe("cache.namespace — scope tags", () => {
     await feed.set("k", "v", { tags: ["shared", "extra"] });
 
     // Tag index entry only contains the key once
-    const sharedTagged = (await cache.get("cache.tags.shared")) as string[];
+    const sharedTagged = (await cache.currentDriver!.tagMembers!("cache:tags:shared")) as string[];
     expect(sharedTagged.filter((k) => k === "feed.42.k")).toHaveLength(1);
   });
 });
@@ -250,8 +250,8 @@ describe("cache.namespace — TaggedScopedCache", () => {
     const feed = cache.namespace("feed.42", { tags: ["user.42"] });
     await feed.tags(["unread"]).set("messages.1", "msg");
 
-    const userTagged = (await cache.get("cache.tags.user.42")) as string[];
-    const unreadTagged = (await cache.get("cache.tags.unread")) as string[];
+    const userTagged = (await cache.currentDriver!.tagMembers!("cache:tags:user.42")) as string[];
+    const unreadTagged = (await cache.currentDriver!.tagMembers!("cache:tags:unread")) as string[];
     expect(userTagged).toContain("feed.42.messages.1");
     expect(unreadTagged).toContain("feed.42.messages.1");
   });
@@ -274,8 +274,8 @@ describe("cache.namespace — TaggedScopedCache", () => {
 
     expect(result).toBe("freshly");
     expect(storedTtl(cache, "feed.42.home")).toBe(120);
-    const userTagged = (await cache.get("cache.tags.user.42")) as string[];
-    const computedTagged = (await cache.get("cache.tags.computed")) as string[];
+    const userTagged = (await cache.currentDriver!.tagMembers!("cache:tags:user.42")) as string[];
+    const computedTagged = (await cache.currentDriver!.tagMembers!("cache:tags:computed")) as string[];
     expect(userTagged).toContain("feed.42.home");
     expect(computedTagged).toContain("feed.42.home");
   });

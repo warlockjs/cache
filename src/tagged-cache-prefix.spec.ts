@@ -130,7 +130,7 @@ describe.each(driverCases)("tag invalidation with a globalPrefix — $name drive
       await tagged.remove("k");
 
       await expect(cache.get("k")).resolves.toBeNull();
-      await expect(cache.get("cache.tags.t")).resolves.toEqual(["k2"]);
+      await expect(cache.currentDriver!.tagMembers!("cache:tags:t")).resolves.toEqual(["k2"]);
     });
   });
 });

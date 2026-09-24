@@ -225,7 +225,7 @@ describe("cache.swr — tags", () => {
       async () => ({ id: 42, name: "Alice" }),
     );
 
-    const tagged = (await cache.get("cache.tags.users")) as string[];
+    const tagged = (await cache.currentDriver!.tagMembers!("cache:tags:users")) as string[];
     expect(tagged).toContain("user.42");
   });
 });
@@ -261,8 +261,8 @@ describe("cache.swr — through ScopedCache", () => {
       async () => "data",
     );
 
-    const userTagged = (await cache.get("cache.tags.user.42")) as string[];
-    const computedTagged = (await cache.get("cache.tags.computed")) as string[];
+    const userTagged = (await cache.currentDriver!.tagMembers!("cache:tags:user.42")) as string[];
+    const computedTagged = (await cache.currentDriver!.tagMembers!("cache:tags:computed")) as string[];
     expect(userTagged).toContain("feed.42.home");
     expect(computedTagged).toContain("feed.42.home");
   });

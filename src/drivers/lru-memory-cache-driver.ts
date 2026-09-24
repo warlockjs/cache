@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import { cosineSimilarity } from "../utils";
 import { BaseCacheDriver } from "./base-cache-driver";
+import { InMemoryTagIndex } from "./in-memory-tag-index";
 
 class CacheNode {
   public next: CacheNode | null = null;
@@ -60,6 +61,11 @@ export class LRUMemoryCacheDriver
    * Cache map
    */
   protected cache: Map<string, CacheNode> = new Map();
+
+  /**
+   * Tag index, kept out of the LRU list so capacity pressure can never evict it.
+   */
+  protected tagIndex: InMemoryTagIndex = new InMemoryTagIndex();
 
   /**
    * Head of the cache
@@ -143,6 +149,8 @@ export class LRUMemoryCacheDriver
     this.log("clearing", parsedNamespace || "(all)");
 
     const removed: string[] = [];
+
+    this.tagIndex.removeNamespace(parsedNamespace);
 
     if (parsedNamespace === "") {
       for (const key of this.cache.keys()) {
@@ -482,6 +490,36 @@ export class LRUMemoryCacheDriver
   /**
    * {@inheritdoc}
    *
+   * Synchronous in-process set, never evicted or expired with the entries.
+   */
+  public async tagAdd(tagKey: CacheKey, members: string[]): Promise<void> {
+    this.tagIndex.add(this.parseKey(tagKey), members);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async tagMembers(tagKey: CacheKey): Promise<string[]> {
+    return this.tagIndex.members(this.parseKey(tagKey));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async tagRemove(tagKey: CacheKey, members: string[]): Promise<void> {
+    this.tagIndex.remove(this.parseKey(tagKey), members);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async tagDelete(tagKey: CacheKey): Promise<void> {
+    this.tagIndex.delete(this.parseKey(tagKey));
+  }
+
+  /**
+   * {@inheritdoc}
+   *
    * When a `globalPrefix` is configured, `flush` scopes itself to that prefix
    * so multi-tenant caches don't accidentally wipe sibling tenants. Without
    * a prefix, clears everything.
@@ -493,6 +531,7 @@ export class LRUMemoryCacheDriver
       await this.removeNamespace("");
     } else {
       this.cache.clear();
+      this.tagIndex.clear();
       this.init();
     }
 

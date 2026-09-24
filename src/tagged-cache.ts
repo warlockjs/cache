@@ -58,13 +58,103 @@ export class TaggedCache implements TaggedCacheDriver {
 
     for (const tag of this.cacheTags) {
       const tagKey = this.tagKey(tag);
-      const keys = (await this.driver.get(tagKey)) || [];
 
-      if (!keys.includes(indexedKey)) {
-        keys.push(indexedKey);
-        await this.driver.set(tagKey, keys, Infinity);
+      await this.addToTag(tagKey, [indexedKey]);
+      await this.pruneTag(tagKey, indexedKey);
+    }
+  }
+
+  /**
+   * Upper bound on member-existence checks per tagged write, so pruning stays
+   * O(1) per write no matter how large an index grows.
+   */
+  protected static readonly PRUNE_CHECKS_PER_WRITE = 20;
+
+  /**
+   * Drop index members whose entry no longer exists (expired, evicted, or
+   * removed outside a tagged handle). Checks a random window of at most
+   * {@link PRUNE_CHECKS_PER_WRITE} members, so a long-lived index converges
+   * to its live members without any write paying for a full scan.
+   */
+  protected async pruneTag(tagKey: string, justWritten: string): Promise<void> {
+    const members = (await this.membersOf(tagKey)).filter((member) => member !== justWritten);
+
+    if (members.length === 0) {
+      return;
+    }
+
+    const limit = TaggedCache.PRUNE_CHECKS_PER_WRITE;
+    const start = members.length > limit ? Math.floor(Math.random() * members.length) : 0;
+    const window = Array.from(
+      { length: Math.min(limit, members.length) },
+      (_, index) => members[(start + index) % members.length],
+    );
+
+    const missing: string[] = [];
+
+    for (const member of window) {
+      if (!(await this.driver.has(member))) {
+        missing.push(member);
       }
     }
+
+    if (missing.length > 0) {
+      await this.removeFromTag(tagKey, missing);
+    }
+  }
+
+  // ------------------------------------------------------------
+  // Tag-index access: the driver's primitives when it has them, else
+  // the legacy get/set array (third-party drivers without primitives).
+  // ------------------------------------------------------------
+
+  protected async addToTag(tagKey: string, members: string[]): Promise<void> {
+    if (typeof this.driver.tagAdd === "function") {
+      return this.driver.tagAdd(tagKey, members);
+    }
+
+    const current = await this.legacyMembers(tagKey);
+    const merged = [...new Set([...current, ...members])];
+
+    if (merged.length !== current.length) {
+      await this.driver.set(tagKey, merged, Infinity);
+    }
+  }
+
+  protected async membersOf(tagKey: string): Promise<string[]> {
+    if (typeof this.driver.tagMembers === "function") {
+      return this.driver.tagMembers(tagKey);
+    }
+
+    return this.legacyMembers(tagKey);
+  }
+
+  protected async removeFromTag(tagKey: string, members: string[]): Promise<void> {
+    if (typeof this.driver.tagRemove === "function") {
+      return this.driver.tagRemove(tagKey, members);
+    }
+
+    const dropped = new Set(members);
+    const current = await this.legacyMembers(tagKey);
+    const kept = current.filter((member) => !dropped.has(member));
+
+    if (kept.length === current.length) {
+      return;
+    }
+
+    if (kept.length === 0) {
+      await this.driver.remove(tagKey);
+    } else {
+      await this.driver.set(tagKey, kept, Infinity);
+    }
+  }
+
+  protected async legacyMembers(tagKey: string): Promise<string[]> {
+    const value = await this.driver.get(tagKey);
+
+    return Array.isArray(value)
+      ? value.filter((member): member is string => typeof member === "string")
+      : [];
   }
 
   /**
@@ -88,10 +178,7 @@ export class TaggedCache implements TaggedCacheDriver {
     const allKeys = new Set<string>();
 
     for (const tag of this.cacheTags) {
-      const tagKey = this.tagKey(tag);
-      const keys = (await this.driver.get(tagKey)) || [];
-
-      for (const key of keys) {
+      for (const key of await this.membersOf(this.tagKey(tag))) {
         allKeys.add(key);
       }
     }
@@ -131,28 +218,35 @@ export class TaggedCache implements TaggedCacheDriver {
     await this.driver.remove(key);
 
     // Remove from all tag relationships
-    for (const tag of this.cacheTags) {
-      const tagKey = this.tagKey(tag);
-      const keys = (await this.driver.get(tagKey)) || [];
-      const updatedKeys = keys.filter((k: string) => k !== indexedKey);
-      await this.driver.set(tagKey, updatedKeys, Infinity);
-    }
+    await this.detachFromTags(indexedKey);
   }
 
   /**
    * Invalidate (clear) all keys associated with the current tags
    */
   public async invalidate(): Promise<void> {
-    const keysToRemove = await this.getTaggedKeys();
-
-    // Remove all tagged keys — indexed un-prefixed, so `remove()` prefixes once
-    for (const key of keysToRemove) {
-      await this.driver.remove(key);
-    }
-
-    // Clear tag relationship keys
     for (const tag of this.cacheTags) {
-      await this.driver.remove(this.tagKey(tag));
+      const tagKey = this.tagKey(tag);
+      const members = await this.membersOf(tagKey);
+
+      // Remove the tagged entries — indexed un-prefixed, so `remove()` prefixes once
+      for (const member of members) {
+        await this.driver.remove(member);
+      }
+
+      // Remove exactly the members read above rather than dropping the whole
+      // index: a key tagged concurrently (after the read) keeps its entry in
+      // the index, so a later invalidate still reaches it.
+      await this.removeFromTag(tagKey, members);
+    }
+  }
+
+  /**
+   * Remove `indexedKey` from every tag of this handle.
+   */
+  protected async detachFromTags(indexedKey: string): Promise<void> {
+    for (const tag of this.cacheTags) {
+      await this.removeFromTag(this.tagKey(tag), [indexedKey]);
     }
   }
 
@@ -195,10 +289,12 @@ export class TaggedCache implements TaggedCacheDriver {
    * {@inheritdoc}
    */
   public async pull(key: CacheKey): Promise<any | null> {
-    const value = await this.get(key);
+    // The driver's own `pull` (atomic on redis / pg / in-process drivers)
+    // hands the value out once; then the key leaves this handle's tags.
+    const value = await this.driver.pull(key);
 
     if (value !== null) {
-      await this.remove(key);
+      await this.detachFromTags(this.indexedKey(key));
     }
 
     return value;
@@ -215,16 +311,11 @@ export class TaggedCache implements TaggedCacheDriver {
    * {@inheritdoc}
    */
   public async increment(key: CacheKey, value: number = 1): Promise<number> {
-    const current = (await this.get(key)) || 0;
+    // The driver's atomic increment (INCRBY / pg upsert / synchronous
+    // in-process), then record the tag relationship.
+    const newValue = await this.driver.increment(key, value);
 
-    if (typeof current !== "number") {
-      throw new Error(
-        `Cannot increment non-numeric value for key: ${this.driver.parseKey(key)}`,
-      );
-    }
-
-    const newValue = current + value;
-    await this.set(key, newValue);
+    await this.storeTaggedKey(key);
 
     return newValue;
   }

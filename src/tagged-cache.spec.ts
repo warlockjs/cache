@@ -145,8 +145,8 @@ describe("TaggedCache", () => {
     const tagged = new TaggedCache(["a", "b"], driver);
     await tagged.set("k", "v");
 
-    const aIndex = (await driver.get("cache:tags:a")) as string[];
-    const bIndex = (await driver.get("cache:tags:b")) as string[];
+    const aIndex = await driver.tagMembers("cache:tags:a");
+    const bIndex = await driver.tagMembers("cache:tags:b");
     expect(aIndex).toContain("k");
     expect(bIndex).toContain("k");
   });

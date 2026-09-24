@@ -32,6 +32,8 @@ function globToRegExp(pattern: string): RegExp {
 
 class FakeRedisClient {
   public store = new Map<string, string>();
+  /** SET-typed keys (tag indexes). A key is either a string in `store` or a set here. */
+  public sets = new Map<string, Set<string>>();
   public expires = new Map<string, number>();
   private handlers = new Map<string, Handler[]>();
   public connected = false;
@@ -69,6 +71,8 @@ class FakeRedisClient {
     if (options?.XX && !this.store.has(key)) {
       return null;
     }
+    // Real SET replaces a key of any type.
+    this.sets.delete(key);
     this.store.set(key, value);
     if (options?.EX) {
       this.expires.set(key, Date.now() + options.EX * 1000);
@@ -77,6 +81,10 @@ class FakeRedisClient {
   }
 
   public async get(key: string): Promise<string | null> {
+    if (this.sets.has(key)) {
+      throw new Error("WRONGTYPE Operation against a key holding the wrong kind of value");
+    }
+
     const expiresAt = this.expires.get(key);
     if (expiresAt && expiresAt < Date.now()) {
       this.store.delete(key);
@@ -91,14 +99,48 @@ class FakeRedisClient {
     let count = 0;
     for (const key of arr) {
       if (this.store.delete(key)) count++;
+      if (this.sets.delete(key)) count++;
       this.expires.delete(key);
     }
     return count;
   }
 
+  private assertSet(key: string) {
+    if (this.store.has(key)) {
+      throw new Error("WRONGTYPE Operation against a key holding the wrong kind of value");
+    }
+  }
+
+  public async sAdd(key: string, members: string | string[]): Promise<number> {
+    this.assertSet(key);
+    const set = this.sets.get(key) ?? new Set<string>();
+    const before = set.size;
+    for (const member of Array.isArray(members) ? members : [members]) set.add(member);
+    this.sets.set(key, set);
+    return set.size - before;
+  }
+
+  public async sMembers(key: string): Promise<string[]> {
+    this.assertSet(key);
+    return [...(this.sets.get(key) ?? [])];
+  }
+
+  public async sRem(key: string, members: string | string[]): Promise<number> {
+    this.assertSet(key);
+    const set = this.sets.get(key);
+    if (!set) return 0;
+    let removed = 0;
+    for (const member of Array.isArray(members) ? members : [members]) {
+      if (set.delete(member)) removed++;
+    }
+    // Redis drops a set once it is empty.
+    if (set.size === 0) this.sets.delete(key);
+    return removed;
+  }
+
   public async keys(pattern: string): Promise<string[]> {
     const regex = globToRegExp(pattern);
-    return [...this.store.keys()].filter((k) => regex.test(k));
+    return [...this.store.keys(), ...this.sets.keys()].filter((k) => regex.test(k));
   }
 
   // Mimics node-redis's `scanIterator`, yielding matching keys across
@@ -110,7 +152,7 @@ class FakeRedisClient {
   }): AsyncGenerator<string> {
     const pattern = options?.MATCH ?? "*";
     const regex = globToRegExp(pattern);
-    const matches = [...this.store.keys()].filter((k) => regex.test(k));
+    const matches = [...this.store.keys(), ...this.sets.keys()].filter((k) => regex.test(k));
     const batchSize = options?.COUNT ?? 10;
 
     for (let i = 0; i < matches.length; i += batchSize) {
@@ -133,11 +175,13 @@ class FakeRedisClient {
 
   public async flushDb(): Promise<void> {
     this.store.clear();
+    this.sets.clear();
     this.expires.clear();
   }
 
   public async flushAll(): Promise<void> {
     this.store.clear();
+    this.sets.clear();
     this.expires.clear();
     this.evalLog = [];
     this.supportsGetDel = true;
@@ -950,5 +994,77 @@ describe("RedisCacheDriver — cross-server atomic ops (wave 2)", () => {
 
     await expect(driver.increment("hits", 2)).resolves.toBe(3);
     expect(await fakeClient.ttl("hits")).toBeGreaterThan(0);
+  });
+});
+
+describe("RedisCacheDriver — tag index (native SET)", () => {
+  beforeAll(async () => {
+    await importDriver();
+  }, 60000);
+
+  beforeEach(async () => {
+    await fakeClient.flushAll();
+  });
+
+  async function connected(globalPrefix?: string) {
+    const RedisCacheDriver = await importDriver();
+    const driver = new RedisCacheDriver();
+    driver.setLoggingState(false);
+    driver.setOptions({ url: "redis://localhost", ...(globalPrefix ? { globalPrefix } : {}) });
+    await driver.connect();
+    return driver;
+  }
+
+  it("indexes concurrent tagged sets in a SET and invalidates all of them", async () => {
+    const driver = await connected();
+    const keys = Array.from({ length: 20 }, (_, index) => `product.${index}`);
+
+    await Promise.all(keys.map((key) => driver.tags(["products"]).set(key, key)));
+
+    expect(fakeClient.sets.get("cache.tags.products")?.size).toBe(20);
+
+    await driver.tags(["products"]).invalidate();
+
+    for (const key of keys) {
+      await expect(driver.get(key)).resolves.toBeNull();
+    }
+
+    // Redis drops a SET once its last member is removed.
+    expect(fakeClient.sets.has("cache.tags.products")).toBe(false);
+  });
+
+  it("keeps the tag SET inside the prefix so flush() sweeps it", async () => {
+    const driver = await connected("tenant");
+
+    await driver.tags(["t"]).set("k", 1);
+    expect(fakeClient.sets.has("tenant.cache.tags.t")).toBe(true);
+
+    await driver.flush();
+
+    expect(fakeClient.sets.has("tenant.cache.tags.t")).toBe(false);
+  });
+
+  it("upgrades a pre-5.20 JSON-string index to a SET on first use", async () => {
+    const driver = await connected();
+
+    // Legacy layout: the index stored as a JSON array STRING.
+    await fakeClient.set("cache.tags.legacy", JSON.stringify(["old.1", "old.2"]));
+
+    await driver.tagAdd("cache:tags:legacy", ["new.1"]);
+
+    expect(fakeClient.store.has("cache.tags.legacy")).toBe(false);
+    expect([...(fakeClient.sets.get("cache.tags.legacy") ?? [])].sort()).toEqual([
+      "new.1",
+      "old.1",
+      "old.2",
+    ]);
+  });
+
+  it("reads a legacy JSON-string index through tagMembers", async () => {
+    const driver = await connected();
+
+    await fakeClient.set("cache.tags.legacy", JSON.stringify(["old.1"]));
+
+    await expect(driver.tagMembers("cache:tags:legacy")).resolves.toEqual(["old.1"]);
   });
 });

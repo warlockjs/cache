@@ -9,6 +9,7 @@ import type {
   MockCacheOptions,
 } from "../types";
 import { BaseCacheDriver } from "./base-cache-driver";
+import { InMemoryTagIndex } from "./in-memory-tag-index";
 
 /**
  * In-memory cache driver with introspection helpers, intended for use as a
@@ -72,6 +73,11 @@ export class MockCacheDriver
   public readonly storage: Map<string, CacheData> = new Map();
 
   /**
+   * Tag index, kept apart from {@link storage} (same model as the memory driver).
+   */
+  protected tagIndex: InMemoryTagIndex = new InMemoryTagIndex();
+
+  /**
    * Ordered record of every public operation routed through this driver.
    * Pushed to before each op runs; tests assert via {@link wasCalled} or by
    * inspecting the array directly.
@@ -106,6 +112,8 @@ export class MockCacheDriver
     this.log("clearing", parsed);
 
     const prefix = parsed + ".";
+
+    this.tagIndex.removeNamespace(parsed);
 
     for (const key of [...this.storage.keys()]) {
       if (key === parsed || key.startsWith(prefix)) {
@@ -329,6 +337,36 @@ export class MockCacheDriver
   }
 
   /**
+   * {@inheritdoc}
+   *
+   * Synchronous in-process set, never evicted or expired with the entries.
+   */
+  public async tagAdd(tagKey: CacheKey, members: string[]): Promise<void> {
+    this.tagIndex.add(this.parseKey(tagKey), members);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async tagMembers(tagKey: CacheKey): Promise<string[]> {
+    return this.tagIndex.members(this.parseKey(tagKey));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async tagRemove(tagKey: CacheKey, members: string[]): Promise<void> {
+    this.tagIndex.remove(this.parseKey(tagKey), members);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async tagDelete(tagKey: CacheKey): Promise<void> {
+    this.tagIndex.delete(this.parseKey(tagKey));
+  }
+
+  /**
    * Standard `flush` — wipes the entire mock store + tag index. Does NOT
    * touch the call log; use {@link reset} to clear that as well.
    */
@@ -337,6 +375,7 @@ export class MockCacheDriver
     this.log("flushing");
 
     this.storage.clear();
+    this.tagIndex.clear();
 
     this.log("flushed");
     await this.emit("flushed");
@@ -388,6 +427,7 @@ export class MockCacheDriver
    */
   public reset(): void {
     this.storage.clear();
+    this.tagIndex.clear();
     this.callLog.length = 0;
   }
 

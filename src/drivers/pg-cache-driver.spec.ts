@@ -114,6 +114,46 @@ class FakePool implements PgClientLike {
       return { rows: [{ "?column?": 1 }], rowCount: 1 };
     }
 
+    // Tag index add: upsert unioning the stored JSON array with $2 (never expires).
+    if (sql.startsWith("/* cache:tag-add */")) {
+      expect(sql).toContain("ON CONFLICT (key) DO UPDATE");
+      expect(sql).toContain("UNION");
+      const [key, members] = values as [string, string[]];
+      const row = this.store.get(key);
+      const current = row && Array.isArray(row.value) ? (row.value as string[]) : [];
+      const merged = [...new Set([...current, ...members])];
+      this.store.set(key, {
+        key,
+        value: merged,
+        expires_at: null,
+        stale_at: row?.stale_at ?? null,
+        tags: row?.tags ?? [],
+      });
+      return { rows: [], rowCount: 1 };
+    }
+
+    // Tag index remove: filter $2 out of the stored array.
+    if (sql.startsWith("/* cache:tag-remove */")) {
+      expect(sql).toContain("<> ALL($2::text[])");
+      const [key, members] = values as [string, string[]];
+      const row = this.store.get(key);
+      if (!row) return { rows: [], rowCount: 0 };
+      const current = Array.isArray(row.value) ? (row.value as string[]) : [];
+      row.value = current.filter((member) => !members.includes(member));
+      return { rows: [], rowCount: 1 };
+    }
+
+    // Drop a tag-index row that ended up empty.
+    if (sql.startsWith("/* cache:tag-drop-empty */")) {
+      const key = values![0] as string;
+      const row = this.store.get(key);
+      if (row && Array.isArray(row.value) && row.value.length === 0) {
+        this.store.delete(key);
+        return { rows: [], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    }
+
     // pgvector extension probe
     if (sql.startsWith("SELECT 1 FROM pg_extension")) {
       return this.pgvectorInstalled ? { rows: [{ "?column?": 1 }], rowCount: 1 } : { rows: [], rowCount: 0 };
@@ -1046,5 +1086,44 @@ describe("PgCacheDriver — cross-server atomic ops (wave 2)", () => {
 
     await expect(driver.update("gone", () => null)).resolves.toBeNull();
     expect(pool.store.has("gone")).toBe(false);
+  });
+});
+
+describe("PgCacheDriver — tag index (atomic JSON-array row)", () => {
+  function make() {
+    const driver = new PgCacheDriver();
+    const pool = new FakePool();
+    driver.setLoggingState(false);
+    driver.setOptions({ client: pool });
+    return { driver, pool };
+  }
+
+  it("indexes concurrent tagged sets with one upsert each and invalidates all of them", async () => {
+    const { driver, pool } = make();
+    const keys = Array.from({ length: 20 }, (_, index) => `product.${index}`);
+
+    await Promise.all(keys.map((key) => driver.tags(["products"]).set(key, key)));
+
+    const adds = pool.queryLog.filter((q) => q.text.trim().startsWith("/* cache:tag-add */"));
+    expect(adds).toHaveLength(20);
+    expect((pool.store.get("cache.tags.products")?.value as string[]).length).toBe(20);
+
+    await driver.tags(["products"]).invalidate();
+
+    for (const key of keys) {
+      await expect(driver.get(key)).resolves.toBeNull();
+    }
+
+    // The emptied index row is dropped.
+    expect(pool.store.has("cache.tags.products")).toBe(false);
+  });
+
+  it("tagRemove keeps members it was not asked to remove", async () => {
+    const { driver, pool } = make();
+
+    await driver.tagAdd("cache:tags:t", ["a", "b", "c"]);
+    await driver.tagRemove("cache:tags:t", ["a"]);
+
+    expect(pool.store.get("cache.tags.t")?.value).toEqual(["b", "c"]);
   });
 });

@@ -184,6 +184,79 @@ export class PgCacheDriver
   }
 
   /**
+   * {@inheritdoc}
+   *
+   * One `INSERT … ON CONFLICT DO UPDATE` that unions the stored JSON array with
+   * `members`. Postgres row-locks the conflicting row, so concurrent adders on
+   * any number of servers serialize and none is lost.
+   *
+   * The index stays a row of the main table holding a JSON array — the same
+   * shape earlier versions wrote — so no schema change or migration is needed
+   * and existing indexes keep working. (The `tags` column only records tags
+   * passed inline to `set()`, not relationships added afterwards, so it can't
+   * serve as the invalidation index.)
+   */
+  public async tagAdd(tagKey: CacheKey, members: string[]): Promise<void> {
+    if (members.length === 0) {
+      return;
+    }
+
+    const t = this.table;
+
+    await this.pgClient.query(
+      `/* cache:tag-add */ INSERT INTO ${t} (key, value)
+       VALUES ($1, to_jsonb($2::text[]))
+       ON CONFLICT (key) DO UPDATE
+         SET value = (
+           SELECT COALESCE(jsonb_agg(u.member), '[]'::jsonb)
+           FROM (
+             SELECT x.member FROM jsonb_array_elements_text(
+               CASE WHEN jsonb_typeof(${t}.value) = 'array' THEN ${t}.value ELSE '[]'::jsonb END
+             ) AS x(member)
+             UNION
+             SELECT y.member FROM unnest($2::text[]) AS y(member)
+           ) AS u
+         ),
+         expires_at = NULL`,
+      [this.parseKey(tagKey), members],
+    );
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * One `UPDATE` that filters `members` out of the stored array (members added
+   * concurrently are kept), then a conditional `DELETE` of the row if it ended
+   * up empty.
+   */
+  public async tagRemove(tagKey: CacheKey, members: string[]): Promise<void> {
+    if (members.length === 0) {
+      return;
+    }
+
+    const t = this.table;
+    const parsedKey = this.parseKey(tagKey);
+
+    await this.pgClient.query(
+      `/* cache:tag-remove */ UPDATE ${t}
+       SET value = (
+         SELECT COALESCE(jsonb_agg(x.member), '[]'::jsonb)
+         FROM jsonb_array_elements_text(
+           CASE WHEN jsonb_typeof(${t}.value) = 'array' THEN ${t}.value ELSE '[]'::jsonb END
+         ) AS x(member)
+         WHERE x.member <> ALL($2::text[])
+       )
+       WHERE key = $1`,
+      [parsedKey, members],
+    );
+
+    await this.pgClient.query(
+      `/* cache:tag-drop-empty */ DELETE FROM ${t} WHERE key = $1 AND value = '[]'::jsonb`,
+      [parsedKey],
+    );
+  }
+
+  /**
    * TTL in seconds bound to `now() + make_interval(secs => $n)`, so expiry is
    * computed on the DB clock (immune to app/DB clock skew). `null` — from
    * `Infinity` / 0 / undefined — yields a NULL `expires_at` (never expires).

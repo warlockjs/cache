@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import { cosineSimilarity, parseTtl } from "../utils";
 import { BaseCacheDriver } from "./base-cache-driver";
+import { InMemoryTagIndex } from "./in-memory-tag-index";
 
 /**
  * Clone non-primitive values so cached state can't be mutated through
@@ -72,6 +73,12 @@ export class MemoryCacheDriver
    * and LRU eviction.
    */
   protected vectorIndex: Map<string, number[]> = new Map();
+
+  /**
+   * Tag index, kept apart from `entries`: never evicted by `maxSize`, never
+   * swept by TTL, and updated synchronously.
+   */
+  protected tagIndex: InMemoryTagIndex = new InMemoryTagIndex();
 
   /**
    * {@inheritdoc}
@@ -193,6 +200,8 @@ export class MemoryCacheDriver
     this.log("clearing", namespace);
 
     namespace = this.parseKey(namespace);
+
+    this.tagIndex.removeNamespace(namespace);
 
     if (namespace === "") {
       this.entries.clear();
@@ -422,6 +431,36 @@ export class MemoryCacheDriver
 
   /**
    * {@inheritdoc}
+   *
+   * Synchronous in-process set — concurrent tagged writes never drop members.
+   */
+  public async tagAdd(tagKey: CacheKey, members: string[]): Promise<void> {
+    this.tagIndex.add(this.parseKey(tagKey), members);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async tagMembers(tagKey: CacheKey): Promise<string[]> {
+    return this.tagIndex.members(this.parseKey(tagKey));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async tagRemove(tagKey: CacheKey, members: string[]): Promise<void> {
+    this.tagIndex.remove(this.parseKey(tagKey), members);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public async tagDelete(tagKey: CacheKey): Promise<void> {
+    this.tagIndex.delete(this.parseKey(tagKey));
+  }
+
+  /**
+   * {@inheritdoc}
    */
   public async flush() {
     this.log("flushing");
@@ -431,6 +470,7 @@ export class MemoryCacheDriver
       this.entries.clear();
       this.expiry.clear();
       this.vectorIndex.clear();
+      this.tagIndex.clear();
     }
 
     this.log("flushed");
