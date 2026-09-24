@@ -6,23 +6,23 @@
 
 ## Skills
 
-- [apply-cache-patterns](@warlock.js/cache/apply-cache-patterns/SKILL.md): Real-world caching patterns in @warlock.js/cache; use when you need to apply cache patterns.
+- [apply-cache-patterns](@warlock.js/cache/apply-cache-patterns/SKILL.md): (no description)
 - [cache-basics](@warlock.js/cache/cache-basics/SKILL.md): Start here for @warlock.js/cache drivers, key-value operations, and application cache configuration.
-- [configure-pg-cache](@warlock.js/cache/configure-pg-cache/SKILL.md): pg cache driver — Postgres setup in @warlock.js/cache; use when you need to configure pg cache.
-- [configure-set-options](@warlock.js/cache/configure-set-options/SKILL.md): The set options object in @warlock.js/cache; use when you need to configure set options.
-- [handle-cache-errors](@warlock.js/cache/handle-cache-errors/SKILL.md): Error classes in @warlock.js/cache; use when you need to handle cache errors.
-- [observe-cache](@warlock.js/cache/observe-cache/SKILL.md): Cache observability — cache.metrics() and the event bus in @warlock.js/cache; use when you need to observe cache.
+- [configure-pg-cache](@warlock.js/cache/configure-pg-cache/SKILL.md): Postgres cache driver setup — KV-only mode (default) or pgvector mode (opt in via options.pg.vector). Caller owns the pg.Pool, driver exposes driver.schema() for one-time DDL. Triggers: `PgCacheDriver`, `driver.schema`, `options.pg.vector`, `pg.Pool`, `hnsw`, `ivfflat`; "use Postgres as cache backend", "set up pgvector semantic cache", "DDL for warlock cache table"; typical import `import { cache, PgCacheDriver } from "@warlock.js/cache"`. Skip: cross-driver similarity API — `@warlock.js/cache/use-cache-similarity/SKILL.md`; driver picker — `@warlock.js/cache/pick-cache-driver/SKILL.md`; competing libs `pg-mem`; raw `pg` / `node-postgres`.
+- [configure-set-options](@warlock.js/cache/configure-set-options/SKILL.md): (no description)
+- [handle-cache-errors](@warlock.js/cache/handle-cache-errors/SKILL.md): (no description)
+- [observe-cache](@warlock.js/cache/observe-cache/SKILL.md): (no description)
 - [overview](@warlock.js/cache/overview/SKILL.md): @warlock.js/cache overview for orientation and choosing the focused skill for the task.
-- [pick-cache-driver](@warlock.js/cache/pick-cache-driver/SKILL.md): Cache drivers — pick the right one in @warlock.js/cache; use when you need to choose cache driver.
-- [test-cache-code](@warlock.js/cache/test-cache-code/SKILL.md): Testing code that touches cache in @warlock.js/cache; use when you need to test cache code.
-- [use-cache-atomic](@warlock.js/cache/use-cache-atomic/SKILL.md): Atomic counters — cache.increment / cache.decrement in @warlock.js/cache; use when you need to use cache atomic.
-- [use-cache-bulk](@warlock.js/cache/use-cache-bulk/SKILL.md): Bulk operations — cache.many / cache.setMany in @warlock.js/cache; use when you need to use cache bulk.
-- [use-cache-list](@warlock.js/cache/use-cache-list/SKILL.md): Lists — the cache.list<T>(key) sub-API in @warlock.js/cache; use when you need to use cache list.
-- [use-cache-lock](@warlock.js/cache/use-cache-lock/SKILL.md): cache.lock() — distributed locks with auto-release in @warlock.js/cache; use when you need to use cache lock.
-- [use-cache-namespace](@warlock.js/cache/use-cache-namespace/SKILL.md): Scoped caches — cache.namespace(prefix, options?) in @warlock.js/cache; use when you need to use cache namespace.
-- [use-cache-similarity](@warlock.js/cache/use-cache-similarity/SKILL.md): cache.similar() — vector-based retrieval in @warlock.js/cache; use when you need to use cache similarity.
-- [use-cache-tags](@warlock.js/cache/use-cache-tags/SKILL.md): Tag-based invalidation in @warlock.js/cache; use when you need to use cache tags.
-- [use-cache-update-merge](@warlock.js/cache/use-cache-update-merge/SKILL.md): update and merge — atomic read-modify-write in @warlock.js/cache; use when you need to use cache update merge.
-- [use-cache-utils](@warlock.js/cache/use-cache-utils/SKILL.md): Cache utilities in @warlock.js/cache; use when you need to use cache utils.
-- [use-cached-hof](@warlock.js/cache/use-cached-hof/SKILL.md): cached() — function-memoization wrapper in @warlock.js/cache; use when you need to use cached hof.
-- [use-swr](@warlock.js/cache/use-swr/SKILL.md): Stale-while-revalidate — cache.swr(key, options, fn) in @warlock.js/cache; use when you need to use swr.
+- [pick-cache-driver](@warlock.js/cache/pick-cache-driver/SKILL.md): (no description)
+- [test-cache-code](@warlock.js/cache/test-cache-code/SKILL.md): (no description)
+- [use-cache-atomic](@warlock.js/cache/use-cache-atomic/SKILL.md): (no description)
+- [use-cache-bulk](@warlock.js/cache/use-cache-bulk/SKILL.md): (no description)
+- [use-cache-list](@warlock.js/cache/use-cache-list/SKILL.md): (no description)
+- [use-cache-lock](@warlock.js/cache/use-cache-lock/SKILL.md): (no description)
+- [use-cache-namespace](@warlock.js/cache/use-cache-namespace/SKILL.md): (no description)
+- [use-cache-similarity](@warlock.js/cache/use-cache-similarity/SKILL.md): (no description)
+- [use-cache-tags](@warlock.js/cache/use-cache-tags/SKILL.md): Tag-based invalidation — attach tags on write, then cache.tags([...]).invalidate() drops every key bound to any of those tags. Triggers: `cache.tags`, `invalidate`, `cache.set` with `tags`; "invalidate every key tagged users", "drop everything for tenant 42", "bulk cache invalidation without knowing keys", "tag a cached value"; typical import `import { cache } from "@warlock.js/cache"`. Skip: prefix-based drop — `@warlock.js/cache/use-cache-namespace/SKILL.md`; HOF memoization with tags — `@warlock.js/cache/use-cached-hof/SKILL.md`; SWR — `@warlock.js/cache/use-swr/SKILL.md`; competing libs `cache-manager` tags, Next.js `revalidateTag`.
+- [use-cache-update-merge](@warlock.js/cache/use-cache-update-merge/SKILL.md): (no description)
+- [use-cache-utils](@warlock.js/cache/use-cache-utils/SKILL.md): (no description)
+- [use-cached-hof](@warlock.js/cache/use-cached-hof/SKILL.md): (no description)
+- [use-swr](@warlock.js/cache/use-swr/SKILL.md): (no description)
