@@ -7,6 +7,11 @@ import type {
 } from "./types";
 import { parseCacheKey } from "./utils";
 
+/** Implemented by `BaseCacheDriver`; a custom driver may not have it. */
+type TagsInvalidatedEmitter = {
+  emitTagsInvalidated(data: { tags: string[]; keys: string[]; durationMs: number }): Promise<void>;
+};
+
 /**
  * Tagged Cache Wrapper
  * Wraps a cache driver to automatically manage tag relationships
@@ -225,6 +230,9 @@ export class TaggedCache implements TaggedCacheDriver {
    * Invalidate (clear) all keys associated with the current tags
    */
   public async invalidate(): Promise<void> {
+    const startedAt = performance.now();
+    const removed = new Set<string>();
+
     for (const tag of this.cacheTags) {
       const tagKey = this.tagKey(tag);
       const members = await this.membersOf(tagKey);
@@ -232,6 +240,7 @@ export class TaggedCache implements TaggedCacheDriver {
       // Remove the tagged entries — indexed un-prefixed, so `remove()` prefixes once
       for (const member of members) {
         await this.driver.remove(member);
+        removed.add(member);
       }
 
       // Remove exactly the members read above rather than dropping the whole
@@ -239,6 +248,16 @@ export class TaggedCache implements TaggedCacheDriver {
       // the index, so a later invalidate still reaches it.
       await this.removeFromTag(tagKey, members);
     }
+
+    // Drivers built on `BaseCacheDriver` emit `invalidated`; a custom driver
+    // without the method simply emits nothing.
+    const driver = this.driver as Partial<TagsInvalidatedEmitter>;
+
+    await driver.emitTagsInvalidated?.({
+      tags: [...this.cacheTags],
+      keys: [...removed],
+      durationMs: performance.now() - startedAt,
+    });
   }
 
   /**

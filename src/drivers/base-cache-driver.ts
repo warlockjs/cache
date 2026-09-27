@@ -953,6 +953,21 @@ export abstract class BaseCacheDriver<
   }
 
   /**
+   * Emit `invalidated` on behalf of a {@link TaggedCache} created by this
+   * driver, once per `invalidate()` call. Listeners cannot fail the
+   * invalidation: `emit` isolates them.
+   *
+   * @internal
+   */
+  public async emitTagsInvalidated(data: {
+    tags: string[];
+    keys: string[];
+    durationMs: number;
+  }): Promise<void> {
+    await this.emit("invalidated", data);
+  }
+
+  /**
    * {@inheritdoc}
    *
    * Default implementation: read → transform → write, serialized per key in

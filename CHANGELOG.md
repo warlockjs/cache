@@ -4,6 +4,12 @@ All notable changes to `@warlock.js/cache` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). `@warlock.js/*` packages are released in lockstep — every package shares the same version number, so a version below may list only the changes that affected this package.
 
+## 5.25.0
+
+### Added
+
+- `invalidated` cache event: `tags([...]).invalidate()` now emits it once, with the tags, the keys it removed and `durationMs`. The per-key `removed` events still fire.
+
 ## 5.24.0 - 2026-09-27
 
 ### Changed

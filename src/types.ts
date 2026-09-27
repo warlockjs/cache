@@ -384,6 +384,7 @@ export type CacheEventType =
   | "miss"
   | "set"
   | "removed"
+  | "invalidated"
   | "flushed"
   | "expired"
   | "connected"
@@ -418,6 +419,12 @@ export type CacheEventData = {
    * Namespace (for namespace operations)
    */
   namespace?: string;
+  /** Tags passed to `tags([...]).invalidate()` (`invalidated` events only). */
+  tags?: string[];
+  /** Keys a tag invalidation removed (`invalidated` events only). */
+  keys?: string[];
+  /** How long the operation took, in milliseconds (`invalidated` events only). */
+  durationMs?: number;
 };
 
 /**
