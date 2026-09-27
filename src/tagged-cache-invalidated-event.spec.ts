@@ -40,7 +40,9 @@ describe("tag invalidation emits `invalidated`", () => {
 
     expect(invalidated).toHaveBeenCalledOnce();
 
-    const event = invalidated.mock.calls[0][0];
+    const event = invalidated.mock.lastCall?.[0];
+
+    if (!event) throw new Error("no invalidated event");
     expect(event.driver).toBe("memory");
     expect(event.tags).toEqual(["posts"]);
     expect([...(event.keys ?? [])].sort()).toEqual(["post.1", "post.2"]);
@@ -61,7 +63,7 @@ describe("tag invalidation emits `invalidated`", () => {
     await cache.tags(["empty"]).invalidate();
 
     expect(invalidated).toHaveBeenCalledOnce();
-    expect(invalidated.mock.calls[0][0].keys).toEqual([]);
+    expect(invalidated.mock.lastCall?.[0].keys).toEqual([]);
   });
 
   it("never lets a throwing listener fail the invalidation", async () => {

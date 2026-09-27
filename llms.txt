@@ -21,7 +21,7 @@
 - [use-cache-lock](@warlock.js/cache/use-cache-lock/SKILL.md): (no description)
 - [use-cache-namespace](@warlock.js/cache/use-cache-namespace/SKILL.md): (no description)
 - [use-cache-similarity](@warlock.js/cache/use-cache-similarity/SKILL.md): (no description)
-- [use-cache-tags](@warlock.js/cache/use-cache-tags/SKILL.md): Tag-based invalidation — attach tags on write, then cache.tags([...]).invalidate() drops every key bound to any of those tags. Triggers: `cache.tags`, `invalidate`, `cache.set` with `tags`; "invalidate every key tagged users", "drop everything for tenant 42", "bulk cache invalidation without knowing keys", "tag a cached value"; typical import `import { cache } from "@warlock.js/cache"`. Skip: prefix-based drop — `@warlock.js/cache/use-cache-namespace/SKILL.md`; HOF memoization with tags — `@warlock.js/cache/use-cached-hof/SKILL.md`; SWR — `@warlock.js/cache/use-swr/SKILL.md`; competing libs `cache-manager` tags, Next.js `revalidateTag`.
+- [use-cache-tags](@warlock.js/cache/use-cache-tags/SKILL.md): (no description)
 - [use-cache-update-merge](@warlock.js/cache/use-cache-update-merge/SKILL.md): (no description)
 - [use-cache-utils](@warlock.js/cache/use-cache-utils/SKILL.md): (no description)
 - [use-cached-hof](@warlock.js/cache/use-cached-hof/SKILL.md): (no description)

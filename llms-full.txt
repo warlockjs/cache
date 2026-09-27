@@ -603,7 +603,7 @@ cache.on("miss", ({ key, driver }) => {
 });
 ```
 
-Available events: `hit`, `miss`, `set`, `removed`, `flushed`, `expired`, `connected`, `disconnected`, `error`.
+Available events: `hit`, `miss`, `set`, `removed`, `invalidated`, `flushed`, `expired`, `connected`, `disconnected`, `error`.
 
 Listeners attached via `cache.on(...)` survive driver switches the same way the metrics collector does.
 
@@ -615,6 +615,7 @@ Listeners attached via `cache.on(...)` survive driver switches the same way the 
 | Page on cache errors | `cache.on("error", ...)` |
 | Periodic export to Prometheus / StatsD | `cache.metrics()` + `setInterval` + `resetMetrics()` |
 | Audit log of every removal | `cache.on("removed", ...)` |
+| See which tag invalidations ran, what they removed and how long they took | `cache.on("invalidated", ({ tags, keys, durationMs }) => ...)` — once per `tags([...]).invalidate()` |
 | Detect a specific anti-pattern (e.g. always-miss key) | `cache.on("miss", ...)` |
 | Debug "is the cache being hit at all?" in dev | `cache.metrics()` once at the end of a flow |
 
