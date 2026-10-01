@@ -1,6 +1,6 @@
 ---
 name: test-cache-code
-description: 'Test code that touches cache — MockCacheDriver (behavioral assertions with wasCalled / callLog), MemoryCacheDriver (full-stack), NullCacheDriver (graceful-degradation). Triggers: `MockCacheDriver`, `MemoryCacheDriver`, `NullCacheDriver`, `wasCalled`, `callLog`, `getStored`, `reset`, `cache.on`; "assert cache was invalidated", "test code that uses cache.set", "mock cache in vitest", "test similarity without a real embedder", "stub the pg cache driver"; typical import `import { cache, MockCacheDriver, MemoryCacheDriver } from "@warlock.js/cache"`. Skip: real driver picks — `@warlock.js/cache/pick-cache-driver/SKILL.md`; competing libs `jest-mock`, `sinon`, `redis-mock`; native `vi.fn`.'
+description: 'Test code that touches cache — MockCacheDriver (behavioral assertions with wasCalled / callLog), MemoryCacheDriver (full-stack), NullCacheDriver (graceful-degradation). Triggers: `MockCacheDriver`, `MemoryCacheDriver`, `NullCacheDriver`, `wasCalled`, `callLog`, `getStored`, `reset`, `cache.on`; "assert cache was invalidated", "test code that uses cache.set", "mock cache in vitest", "test similarity without a real embedder", "stub the pg cache driver"; typical import `import { cache, MockCacheDriver, MemoryCacheDriver } from "@warlock.js/cache"`. Skip: real driver picks — the `pick-cache-driver` topic; competing libs `jest-mock`, `sinon`, `redis-mock`; native `vi.fn`.'
 ---
 
 # Testing code that touches cache
@@ -186,7 +186,7 @@ await Promise.all(
 await expect(cache.get("counter")).resolves.toBe(10);
 ```
 
-Runs in-process only — for cross-process safety see [`@warlock.js/cache/use-cache-lock/SKILL.md`](@warlock.js/cache/use-cache-lock/SKILL.md).
+Runs in-process only — for cross-process safety see the `use-cache-lock` topic.
 
 ## Testing similarity code paths
 

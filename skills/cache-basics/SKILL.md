@@ -24,15 +24,17 @@ The 10 things that are true in every cache use:
 1. **Public API is the `cache` singleton** (`import { cache } from "@warlock.js/cache"`). No `new CacheManager()` for consumers.
 2. **Every data op runs against the currently selected driver.** Switch via `cache.use("name")` or use a per-call override: `cache.set(k, v, { driver: "redis" })`.
 3. **Consumers never `await connect()` directly.** `cache.init()` does that once at startup after `cache.setCacheConfigurations(...)`. For drivers needing runtime-built options (e.g. `pg`'s `client: pg.Pool`), skip `init()` and call `cache.use("pg", { client: pool })`.
-4. **TTL accepts three shapes at the call site**: `number` (seconds), `string` (`"1h"`, `"30m"`, `"7d"` — parsed via `ms`), or a full `CacheSetOptions` object. See [`@warlock.js/cache/configure-set-options/SKILL.md`](@warlock.js/cache/configure-set-options/SKILL.md).
-5. **`update` and `merge` throw `CacheUnsupportedError` on the file driver.** Use memory or redis for atomic mutation. See [`@warlock.js/cache/use-cache-update-merge/SKILL.md`](@warlock.js/cache/use-cache-update-merge/SKILL.md).
+4. **TTL accepts three shapes at the call site**: `number` (seconds), `string` (`"1h"`, `"30m"`, `"7d"` — parsed via `ms`), or a full `CacheSetOptions` object. See the `configure-set-options` topic.
+5. **`update` and `merge` throw `CacheUnsupportedError` on the file driver.** Use memory or redis for atomic mutation. See the `use-cache-update-merge` topic.
 6. **The value you read is a deep clone.** `structuredClone` protects the cache from accidental mutation of returned objects.
-7. **`remember()` is stampede-safe within a single process.** Cross-process safety requires `onConflict: "create"` plus TTL (Redis-native). For slow upstreams where slightly-stale data is acceptable, prefer `cache.swr(...)` — see [`@warlock.js/cache/use-swr/SKILL.md`](@warlock.js/cache/use-swr/SKILL.md).
+7. **`remember()` is stampede-safe within a single process.** Cross-process safety requires `onConflict: "create"` plus TTL (Redis-native). For slow upstreams where slightly-stale data is acceptable, prefer `cache.swr(...)` — see the `use-swr` topic.
 8. **`cache.metrics()` returns a running snapshot** — counters, hit rate, latency percentiles, per-driver breakdowns. Lazy: collector attaches on first call so apps that never read metrics pay zero cost.
-9. **`cache.namespace(prefix, options?)` returns a scoped handle** — every key auto-prefixed, scope-level `ttl` / `tags` defaults. See [`@warlock.js/cache/use-cache-namespace/SKILL.md`](@warlock.js/cache/use-cache-namespace/SKILL.md).
-10. **Similarity retrieval** lives on the same driver contract — `set(k, v, { vector })` indexes the entry; `cache.similar(vec, ...)` returns nearest hits. See [`@warlock.js/cache/use-cache-similarity/SKILL.md`](@warlock.js/cache/use-cache-similarity/SKILL.md).
+9. **`cache.namespace(prefix, options?)` returns a scoped handle** — every key auto-prefixed, scope-level `ttl` / `tags` defaults. See the `use-cache-namespace` topic.
+10. **Similarity retrieval** lives on the same driver contract — `set(k, v, { vector })` indexes the entry; `cache.similar(vec, ...)` returns nearest hits. See the `use-cache-similarity` topic.
 
 ## Minimal startup
+
+> **In a Warlock app** you do not call `cache.setCacheConfigurations(...)` or `cache.init()` yourself. Put the configuration in `src/config/cache.ts`; the framework's cache connector reads it (`config.get("cache")`), calls `cache.setCacheConfigurations(...)`, then `await cache.init()` at boot, and does nothing if no cache config exists. The manual setup below is for standalone use (scripts, tests, non-Warlock services).
 
 ```ts
 import {
@@ -94,21 +96,21 @@ const user = await cache.remember("user.1", "1h", async () => db.users.find(1));
 
 | If the task is about… | Load |
 | --- | --- |
-| Choosing a driver, configuring it, or understanding what each one does best | [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md) |
-| The `set` options object (`ttl`, `expiresAt`, `tags`, `onConflict`, `driver`, `vector`) | [`@warlock.js/cache/configure-set-options/SKILL.md`](@warlock.js/cache/configure-set-options/SKILL.md) |
-| Memoization with `remember()`, counters, negative caching, per-tenant scoping, TTL constants | [`@warlock.js/cache/apply-cache-patterns/SKILL.md`](@warlock.js/cache/apply-cache-patterns/SKILL.md) |
-| Scoped handles via `cache.namespace(prefix, options?)` | [`@warlock.js/cache/use-cache-namespace/SKILL.md`](@warlock.js/cache/use-cache-namespace/SKILL.md) |
-| Tag-based invalidation — `cache.tags([...]).invalidate()` | [`@warlock.js/cache/use-cache-tags/SKILL.md`](@warlock.js/cache/use-cache-tags/SKILL.md) |
-| Stale-while-revalidate — `cache.swr(...)` | [`@warlock.js/cache/use-swr/SKILL.md`](@warlock.js/cache/use-swr/SKILL.md) |
-| Wrapping a function with `cached()` — HOF memoization with `.invalidate()` | [`@warlock.js/cache/use-cached-hof/SKILL.md`](@warlock.js/cache/use-cached-hof/SKILL.md) |
-| Distributed locks — `cache.lock(key, ttl, fn)` with auto-release | [`@warlock.js/cache/use-cache-lock/SKILL.md`](@warlock.js/cache/use-cache-lock/SKILL.md) |
-| Queues, recent-N buffers, `push`/`shift`/`trim` — the list sub-API | [`@warlock.js/cache/use-cache-list/SKILL.md`](@warlock.js/cache/use-cache-list/SKILL.md) |
-| Atomic read-modify-write via `update()` and `merge()` | [`@warlock.js/cache/use-cache-update-merge/SKILL.md`](@warlock.js/cache/use-cache-update-merge/SKILL.md) |
-| Similarity retrieval — `set({ vector })` + `cache.similar(...)` | [`@warlock.js/cache/use-cache-similarity/SKILL.md`](@warlock.js/cache/use-cache-similarity/SKILL.md) |
-| Postgres driver setup (KV-only or with pgvector) | [`@warlock.js/cache/configure-pg-cache/SKILL.md`](@warlock.js/cache/configure-pg-cache/SKILL.md) |
-| `cache.metrics()` aggregate snapshot + event bus for per-event reactions | [`@warlock.js/cache/observe-cache/SKILL.md`](@warlock.js/cache/observe-cache/SKILL.md) |
-| Error classes (`CacheConfigurationError`, `CacheUnsupportedError`, etc.) | [`@warlock.js/cache/handle-cache-errors/SKILL.md`](@warlock.js/cache/handle-cache-errors/SKILL.md) |
-| Tests that touch cache code paths — `MockCacheDriver`, `MemoryCacheDriver` | [`@warlock.js/cache/test-cache-code/SKILL.md`](@warlock.js/cache/test-cache-code/SKILL.md) |
+| Choosing a driver, configuring it, or understanding what each one does best | The `pick-cache-driver` topic |
+| The `set` options object (`ttl`, `expiresAt`, `tags`, `onConflict`, `driver`, `vector`) | The `configure-set-options` topic |
+| Memoization with `remember()`, counters, negative caching, per-tenant scoping, TTL constants | The `apply-cache-patterns` topic |
+| Scoped handles via `cache.namespace(prefix, options?)` | The `use-cache-namespace` topic |
+| Tag-based invalidation — `cache.tags([...]).invalidate()` | The `use-cache-tags` topic |
+| Stale-while-revalidate — `cache.swr(...)` | The `use-swr` topic |
+| Wrapping a function with `cached()` — HOF memoization with `.invalidate()` | The `use-cached-hof` topic |
+| Distributed locks — `cache.lock(key, ttl, fn)` with auto-release | The `use-cache-lock` topic |
+| Queues, recent-N buffers, `push`/`shift`/`trim` — the list sub-API | The `use-cache-list` topic |
+| Atomic read-modify-write via `update()` and `merge()` | The `use-cache-update-merge` topic |
+| Similarity retrieval — `set({ vector })` + `cache.similar(...)` | The `use-cache-similarity` topic |
+| Postgres driver setup (KV-only or with pgvector) | The `configure-pg-cache` topic |
+| `cache.metrics()` aggregate snapshot + event bus for per-event reactions | The `observe-cache` topic |
+| Error classes (`CacheConfigurationError`, `CacheUnsupportedError`, etc.) | The `handle-cache-errors` topic |
+| Tests that touch cache code paths — `MockCacheDriver`, `MemoryCacheDriver` | The `test-cache-code` topic |
 
 ## Things NOT to do
 

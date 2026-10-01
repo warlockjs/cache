@@ -1,6 +1,6 @@
 ---
 name: pick-cache-driver
-description: 'Pick a cache driver — null / memory / memoryExtended / lru / file / redis / pg / mock — and configure it. Triggers: `cache.setCacheConfigurations`, `BaseCacheDriver`, `cache.use`, `cache.load`, `cache.driver`, `globalPrefix`; "which cache driver should I use", "configure redis driver", "register custom cache driver", "multi-tenant scoping"; typical import `import { cache, BaseCacheDriver } from "@warlock.js/cache"`. Skip: cache CRUD — `@warlock.js/cache/cache-basics/SKILL.md`; pg setup — `@warlock.js/cache/configure-pg-cache/SKILL.md`; competing libs `lru-cache`, `node-cache`, `keyv`, `ioredis`; native `Map`.'
+description: 'Pick a cache driver — null / memory / memoryExtended / lru / file / redis / pg / mock — and configure it. Triggers: `cache.setCacheConfigurations`, `BaseCacheDriver`, `cache.use`, `cache.load`, `cache.driver`, `globalPrefix`; "which cache driver should I use", "configure redis driver", "register custom cache driver", "multi-tenant scoping"; typical import `import { cache, BaseCacheDriver } from "@warlock.js/cache"`. Skip: cache CRUD — the `cache-basics` topic; pg setup — the `configure-pg-cache` topic; competing libs `lru-cache`, `node-cache`, `keyv`, `ioredis`; native `Map`.'
 ---
 
 # Cache drivers — pick the right one
@@ -71,7 +71,7 @@ Cache keys can carry untrusted input (e.g. a `cached()` auto-key derived from a 
 
 - **`file`** — a key/namespace maps to exactly one on-disk directory component: `%`, `/`, and `\` are percent-encoded before the path is built, so `../../etc` becomes an inert directory name instead of a traversal. The resolved path is also asserted to stay inside the configured cache root (throws `CacheError` otherwise) — a second, encoding-independent check. `removeNamespace` clears both the namespace's own directory and every dotted child (`ns`, `ns.*`), honoring `globalPrefix`.
 - **`redis`** — `removeNamespace` escapes glob metacharacters (`*`, `?`, `[`, `\`) in the namespace before building its match pattern, and walks matches with a `SCAN` cursor (`scanIterator`) instead of the blocking `KEYS` command, so clearing a namespace on a large keyspace doesn't stall the event loop for other tenants.
-- **Errors that echo a connection string** (Redis `connect()` failures, any driver's failed op) are logged through a `safeErrorInfo()` helper that redacts `scheme://user:pass@` credentials to `scheme://[REDACTED]@` and never prints the raw `Error` object — see [`@warlock.js/cache/handle-cache-errors/SKILL.md`](@warlock.js/cache/handle-cache-errors/SKILL.md).
+- **Errors that echo a connection string** (Redis `connect()` failures, any driver's failed op) are logged through a `safeErrorInfo()` helper that redacts `scheme://user:pass@` credentials to `scheme://[REDACTED]@` and never prints the raw `Error` object — see the `handle-cache-errors` topic.
 
 ## Registering a custom driver
 
@@ -125,5 +125,5 @@ The manager loads (and connects) the override driver lazily on first use, then r
 
 ## See also
 
-- [`@warlock.js/cache/configure-pg-cache/SKILL.md`](@warlock.js/cache/configure-pg-cache/SKILL.md) — full pg setup (KV-only and pgvector mode)
-- [`@warlock.js/cache/test-cache-code/SKILL.md`](@warlock.js/cache/test-cache-code/SKILL.md) — `MockCacheDriver` and `NullCacheDriver` for tests
+- The `configure-pg-cache` topic — full pg setup (KV-only and pgvector mode)
+- The `test-cache-code` topic — `MockCacheDriver` and `NullCacheDriver` for tests

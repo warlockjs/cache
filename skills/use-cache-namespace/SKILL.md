@@ -1,6 +1,6 @@
 ---
 name: use-cache-namespace
-description: 'Scope cache keys via cache.namespace(prefix, options?) — every key auto-prefixed, scope-level ttl / tags defaults, nested scopes, .clear() sugar. Triggers: `cache.namespace`, `cache.removeNamespace`, `clear`, `globalPrefix`; "scope cache keys under a prefix", "share TTL across a whole prefix", "drop every key under user.1", "nested cache scopes"; typical import `import { cache } from "@warlock.js/cache"`. Skip: tag-based bulk drop — `@warlock.js/cache/use-cache-tags/SKILL.md`; multi-tenant driver-level prefix — `@warlock.js/cache/pick-cache-driver/SKILL.md`; SWR — `@warlock.js/cache/use-swr/SKILL.md`; competing libs `keyv` namespaces.'
+description: 'Scope cache keys via cache.namespace(prefix, options?) — every key auto-prefixed, scope-level ttl / tags defaults, nested scopes, .clear() sugar. Triggers: `cache.namespace`, `cache.removeNamespace`, `clear`, `globalPrefix`; "scope cache keys under a prefix", "share TTL across a whole prefix", "drop every key under user.1", "nested cache scopes"; typical import `import { cache } from "@warlock.js/cache"`. Skip: tag-based bulk drop — the `use-cache-tags` topic; multi-tenant driver-level prefix — the `pick-cache-driver` topic; SWR — the `use-swr` topic; competing libs `keyv` namespaces.'
 ---
 
 # Scoped caches — `cache.namespace(prefix, options?)`
@@ -51,11 +51,11 @@ await cache.set("user:2:profile", otherProfile);
 await cache.removeNamespace("user.1");  // drops both user:1 entries, keeps user:2
 ```
 
-Cheaper than tags (no reverse index to maintain). Every real driver supports it — memory family and `lru` by prefix-scan, `file` by directory (including dotted sibling keys like `ns.a`), `redis` by non-blocking `SCAN` (not `KEYS`), `pg` by key/`LIKE` prefix; `null` no-ops. Namespace strings are treated as data, not glob/path input — see [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md) for the file-path-containment and redis-glob-escaping details.
+Cheaper than tags (no reverse index to maintain). Every real driver supports it — memory family and `lru` by prefix-scan, `file` by directory (including dotted sibling keys like `ns.a`), `redis` by non-blocking `SCAN` (not `KEYS`), `pg` by key/`LIKE` prefix; `null` no-ops. Namespace strings are treated as data, not glob/path input — see the `pick-cache-driver` topic for the file-path-containment and redis-glob-escaping details.
 
 ## Multi-tenant scoping at the driver level
 
-Instead of every call passing a tenant prefix, attach `globalPrefix` to the driver config — see [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md). Function form runs per call.
+Instead of every call passing a tenant prefix, attach `globalPrefix` to the driver config — see the `pick-cache-driver` topic. Function form runs per call.
 
 ```ts
 options: {
@@ -79,7 +79,7 @@ await feed.swr(
 // stored at feed.<userId>.home, tagged [user.<userId>, computed]
 ```
 
-Note: scope `ttl` defaults are NOT applied to SWR — `freshTtl` / `staleTtl` always come from the call site. See [`@warlock.js/cache/use-swr/SKILL.md`](@warlock.js/cache/use-swr/SKILL.md).
+Note: scope `ttl` defaults are NOT applied to SWR — `freshTtl` / `staleTtl` always come from the call site. See the `use-swr` topic.
 
 ## Things NOT to do
 

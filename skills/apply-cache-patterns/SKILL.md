@@ -1,11 +1,11 @@
 ---
 name: apply-cache-patterns
-description: 'Compose cache primitives into real-world patterns — remember() memoization, cross-node stampede protection via a distributed lock (onConflict: ''create''), negative caching, and per-tenant scoping. Triggers: `cache.remember`, `cache.set` with `onConflict: "create"`, `globalPrefix`; "memoize this function", "prevent cache stampede across nodes", "cache not-found results", "per-tenant cache scoping"; typical import `import { cache } from "@warlock.js/cache"`. Skip: counters — `@warlock.js/cache/use-cache-atomic/SKILL.md`; bulk get/set — `@warlock.js/cache/use-cache-bulk/SKILL.md`; TTL constants/utilities — `@warlock.js/cache/use-cache-utils/SKILL.md`; named lock wrapper — `@warlock.js/cache/use-cache-lock/SKILL.md`; SWR — `@warlock.js/cache/use-swr/SKILL.md`; competing libs `lru-cache`, `node-cache`, `keyv`.'
+description: 'Compose cache primitives into real-world patterns — remember() memoization, cross-node stampede protection via a distributed lock (onConflict: ''create''), negative caching, and per-tenant scoping. Triggers: `cache.remember`, `cache.set` with `onConflict: "create"`, `globalPrefix`; "memoize this function", "prevent cache stampede across nodes", "cache not-found results", "per-tenant cache scoping"; typical import `import { cache } from "@warlock.js/cache"`. Skip: counters — the `use-cache-atomic` topic; bulk get/set — the `use-cache-bulk` topic; TTL constants/utilities — the `use-cache-utils` topic; named lock wrapper — the `use-cache-lock` topic; SWR — the `use-swr` topic; competing libs `lru-cache`, `node-cache`, `keyv`.'
 ---
 
 # Real-world caching patterns
 
-Common shapes — the "general patterns" file. Specialized topics have dedicated skills: [`use-cache-tags`](@warlock.js/cache/use-cache-tags/SKILL.md), [`use-cache-namespace`](@warlock.js/cache/use-cache-namespace/SKILL.md), [`use-swr`](@warlock.js/cache/use-swr/SKILL.md), [`use-cache-lock`](@warlock.js/cache/use-cache-lock/SKILL.md), [`use-cache-list`](@warlock.js/cache/use-cache-list/SKILL.md).
+Common shapes — the "general patterns" file. Specialized shapes live in their own topics: `use-cache-tags`, `use-cache-namespace`, `use-swr`, `use-cache-lock`, `use-cache-list`.
 
 ## Memoize an expensive function — `remember`
 
@@ -45,7 +45,7 @@ try {
 }
 ```
 
-This requires a driver with atomic `SET NX` — Redis is native, memory/LRU/file emulate (single-process only). For a higher-level wrapper that does the lock-and-release for you, see [`@warlock.js/cache/use-cache-lock/SKILL.md`](@warlock.js/cache/use-cache-lock/SKILL.md).
+This requires a driver with atomic `SET NX` — Redis is native, memory/LRU/file emulate (single-process only). For a higher-level wrapper that does the lock-and-release for you, see the `use-cache-lock` topic.
 
 ## Negative caching
 
@@ -89,10 +89,10 @@ await cache.tags([`tenant-${tenantId}`]).invalidate();
 
 ## See also
 
-- [`@warlock.js/cache/use-cache-atomic/SKILL.md`](@warlock.js/cache/use-cache-atomic/SKILL.md) — `increment` / `decrement` counters
-- [`@warlock.js/cache/use-cache-bulk/SKILL.md`](@warlock.js/cache/use-cache-bulk/SKILL.md) — `many` / `setMany`
-- [`@warlock.js/cache/use-cache-utils/SKILL.md`](@warlock.js/cache/use-cache-utils/SKILL.md) — `CACHE_FOR` constants and TTL/key helpers
-- [`@warlock.js/cache/use-cache-tags/SKILL.md`](@warlock.js/cache/use-cache-tags/SKILL.md) — tag-based invalidation
-- [`@warlock.js/cache/use-cache-namespace/SKILL.md`](@warlock.js/cache/use-cache-namespace/SKILL.md) — scoped handles and `removeNamespace`
-- [`@warlock.js/cache/use-swr/SKILL.md`](@warlock.js/cache/use-swr/SKILL.md) — stale-while-revalidate for slow upstreams
-- [`@warlock.js/cache/use-cached-hof/SKILL.md`](@warlock.js/cache/use-cached-hof/SKILL.md) — `cached()` HOF for declarative memoization
+- The `use-cache-atomic` topic — `increment` / `decrement` counters
+- The `use-cache-bulk` topic — `many` / `setMany`
+- The `use-cache-utils` topic — `CACHE_FOR` constants and TTL/key helpers
+- The `use-cache-tags` topic — tag-based invalidation
+- The `use-cache-namespace` topic — scoped handles and `removeNamespace`
+- The `use-swr` topic — stale-while-revalidate for slow upstreams
+- The `use-cached-hof` topic — `cached()` HOF for declarative memoization

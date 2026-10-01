@@ -1,6 +1,6 @@
 ---
 name: handle-cache-errors
-description: 'Cache error classes — CacheError base, CacheConfigurationError, CacheConnectionError, CacheDriverNotInitializedError, CacheUnsupportedError, CacheConcurrencyError. Triggers: `CacheError`, `CacheConfigurationError`, `CacheConnectionError`, `CacheDriverNotInitializedError`, `CacheUnsupportedError`, `CacheConcurrencyError`; "catch cache errors at the boundary", "degrade when update or merge throws", "what does CacheUnsupportedError mean", "fall back when redis is down"; typical import `import { CacheError, CacheConfigurationError, CacheUnsupportedError } from "@warlock.js/cache"`. Skip: choosing a supported driver — `@warlock.js/cache/pick-cache-driver/SKILL.md`; observing errors via events — `@warlock.js/cache/observe-cache/SKILL.md`; competing libs ignore — generic `Error` patterns.'
+description: 'Cache error classes — CacheError base, CacheConfigurationError, CacheConnectionError, CacheDriverNotInitializedError, CacheUnsupportedError, CacheConcurrencyError. Triggers: `CacheError`, `CacheConfigurationError`, `CacheConnectionError`, `CacheDriverNotInitializedError`, `CacheUnsupportedError`, `CacheConcurrencyError`; "catch cache errors at the boundary", "degrade when update or merge throws", "what does CacheUnsupportedError mean", "fall back when redis is down"; typical import `import { CacheError, CacheConfigurationError, CacheUnsupportedError } from "@warlock.js/cache"`. Skip: choosing a supported driver — the `pick-cache-driver` topic; observing errors via events — the `observe-cache` topic; competing libs ignore — generic `Error` patterns.'
 ---
 
 # Error classes
@@ -26,7 +26,7 @@ import {
 | `CacheDriverNotInitializedError` | Any data op called before `cache.init()` / `cache.use()` | Call `cache.init()` at app startup. Tests often forget this — add a `beforeEach`. |
 | `CacheUnsupportedError` | Driver doesn't implement the requested op. Today: `update` / `merge` on the file driver; `set({ vector })` and `similar()` on file / redis / pg-without-`vector`-config. | Switch driver (memory family for dev similarity, `pg` with `vector` config for production), or queue the op. |
 | `CacheConcurrencyError` | Declared for future optimistic-concurrency exhaustion on Redis `update()` | Not thrown today. Reserved for the v2.1 `WATCH`/`MULTI` implementation. |
-| `CacheError` (file driver, path containment) | A key/namespace, after percent-encoding, still resolves outside the cache root — `"Cache key resolves outside the cache directory: ..."`. Last line of defense against path traversal on top of the encoding step; should not happen in normal use. | Treat as a programmer/attacker-input error — don't retry; investigate the key source. See [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md) for the encoding contract. |
+| `CacheError` (file driver, path containment) | A key/namespace, after percent-encoding, still resolves outside the cache root — `"Cache key resolves outside the cache directory: ..."`. Last line of defense against path traversal on top of the encoding step; should not happen in normal use. | Treat as a programmer/attacker-input error — don't retry; investigate the key source. See the `pick-cache-driver` topic for the encoding contract. |
 
 ## Special case — `setNX` unsupported
 
@@ -36,7 +36,7 @@ Calling `cache.setNX(...)` on a driver that doesn't implement it throws a plain 
 // Error: "setNX is not supported by the current cache driver: memory"
 ```
 
-This is legacy. The v2-preferred way is `cache.set(k, v, { onConflict: "create" })` which works on every driver (Redis native, others emulated). See [`@warlock.js/cache/configure-set-options/SKILL.md`](@warlock.js/cache/configure-set-options/SKILL.md).
+This is legacy. The v2-preferred way is `cache.set(k, v, { onConflict: "create" })` which works on every driver (Redis native, others emulated). See the `configure-set-options` topic.
 
 ## Patterns
 

@@ -1,6 +1,6 @@
 ---
 name: use-swr
-description: 'Stale-while-revalidate via cache.swr(key, {freshTtl, staleTtl}, fn) — returns cached instantly when fresh, returns cached + background refresh when stale, blocks only when fully expired. Triggers: `cache.swr`, `freshTtl`, `staleTtl`, `tags`, `driver`, `stale_at`; "serve stale while refreshing", "degrade when upstream is down", "never block on cache miss"; typical import `import { cache } from "@warlock.js/cache"`. Skip: block-until-fresh memoization — `@warlock.js/cache/apply-cache-patterns/SKILL.md`; observing refresh failures — `@warlock.js/cache/observe-cache/SKILL.md`; competing libs `swr` (React, client-side).'
+description: 'Stale-while-revalidate via cache.swr(key, {freshTtl, staleTtl}, fn) — returns cached instantly when fresh, returns cached + background refresh when stale, blocks only when fully expired. Triggers: `cache.swr`, `freshTtl`, `staleTtl`, `tags`, `driver`, `stale_at`; "serve stale while refreshing", "degrade when upstream is down", "never block on cache miss"; typical import `import { cache } from "@warlock.js/cache"`. Skip: block-until-fresh memoization — the `apply-cache-patterns` topic; observing refresh failures — the `observe-cache` topic; competing libs `swr` (React, client-side).'
 ---
 
 # Stale-while-revalidate — `cache.swr(key, options, fn)`
@@ -11,7 +11,7 @@ Returns the cached value immediately when it can; refreshes in the background wh
 
 Use `cache.swr()` when **slightly-stale data is acceptable** and **the upstream is slow / occasionally fails**. That's most product-detail pages, dashboards, third-party API responses, expensive aggregations.
 
-Use `cache.remember()` when freshness is non-negotiable — auth, balances, billing, anything where the user must see the latest. Remember blocks every miss; SWR doesn't. See [`@warlock.js/cache/apply-cache-patterns/SKILL.md`](@warlock.js/cache/apply-cache-patterns/SKILL.md).
+Use `cache.remember()` when freshness is non-negotiable — auth, balances, billing, anything where the user must see the latest. Remember blocks every miss; SWR doesn't. See the `apply-cache-patterns` topic.
 
 ## Three windows
 
@@ -51,7 +51,7 @@ await cache.swr(
 
 1. **Concurrent stale-window callers share one refresh.** Per-key dedupe via the driver's existing locks map — no thundering herd on background refresh.
 2. **Failed background refreshes preserve the stale entry.** No retry storm; the next stale-window read tries again. Failures emit `error` events for observability.
-3. **The caller never sees a refresh failure.** If you returned the stale value, you got your data — failures only show up via `cache.on("error", ...)`. See [`@warlock.js/cache/observe-cache/SKILL.md`](@warlock.js/cache/observe-cache/SKILL.md).
+3. **The caller never sees a refresh failure.** If you returned the stale value, you got your data — failures only show up via `cache.on("error", ...)`. See the `observe-cache` topic.
 4. **Tags compose.** Per-call tags + scope tags (when via `cache.namespace().swr(...)`) merge additively.
 5. **Scope `ttl` defaults are NOT applied to SWR.** `freshTtl` / `staleTtl` always come from the call site.
 

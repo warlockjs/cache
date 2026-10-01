@@ -1,6 +1,6 @@
 ---
 name: use-cache-bulk
-description: 'Bulk reads/writes via cache.many(keys[]) → values[] (nulls for misses, order preserved) and cache.setMany(record, ttl?) → void. Triggers: `cache.many`, `cache.setMany`, "get multiple keys at once", "batch read cache", "warm the cache", "preload many keys", "mget", "mset"; typical import `import { cache } from "@warlock.js/cache"`. Skip: tag-based bulk invalidation — `@warlock.js/cache/use-cache-tags/SKILL.md`; single-key ops — `@warlock.js/cache/cache-basics/SKILL.md`; competing libs `ioredis` `MGET`/`MSET`.'
+description: 'Bulk reads/writes via cache.many(keys[]) → values[] (nulls for misses, order preserved) and cache.setMany(record, ttl?) → void. Triggers: `cache.many`, `cache.setMany`, "get multiple keys at once", "batch read cache", "warm the cache", "preload many keys", "mget", "mset"; typical import `import { cache } from "@warlock.js/cache"`. Skip: tag-based bulk invalidation — the `use-cache-tags` topic; single-key ops — the `cache-basics` topic; competing libs `ioredis` `MGET`/`MSET`.'
 ---
 
 # Bulk operations — `cache.many` / `cache.setMany`
@@ -40,7 +40,7 @@ await cache.setMany({
 - Keys are the object keys; values are the object values.
 - The optional second arg is a single TTL (seconds) applied to **all** entries —
   there's no per-entry TTL or `tags` knob here. When you need tags or mixed TTLs,
-  loop with [`cache.set`](@warlock.js/cache/configure-set-options/SKILL.md) and
+  loop with `cache.set` (see the `configure-set-options` topic) and
   the rich options object instead.
 
 ## Performance note
@@ -52,6 +52,6 @@ returned promise rejects.
 
 ## See also
 
-- [`@warlock.js/cache/cache-basics/SKILL.md`](@warlock.js/cache/cache-basics/SKILL.md) — single-key `get` / `set` / `remember`
-- [`@warlock.js/cache/configure-set-options/SKILL.md`](@warlock.js/cache/configure-set-options/SKILL.md) — per-entry TTL, tags, conflict policy
-- [`@warlock.js/cache/use-cache-tags/SKILL.md`](@warlock.js/cache/use-cache-tags/SKILL.md) — invalidate a batch by tag
+- The `cache-basics` topic — single-key `get` / `set` / `remember`
+- The `configure-set-options` topic — per-entry TTL, tags, conflict policy
+- The `use-cache-tags` topic — invalidate a batch by tag

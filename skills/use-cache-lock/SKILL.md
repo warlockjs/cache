@@ -1,6 +1,6 @@
 ---
 name: use-cache-lock
-description: 'Distributed lock via cache.lock(key, ttl, fn) — acquire, run fn, auto-release. Returns {acquired: true, value} or {acquired: false}. Triggers: `cache.lock`, `LockOutcome`, `acquired`, `owner`; "run cron on only one server", "idempotent webhook handler", "dedup payment processing", "lock a task across nodes"; typical import `import { cache } from "@warlock.js/cache"`. Skip: raw `onConflict: "create"` recipe — `@warlock.js/cache/apply-cache-patterns/SKILL.md`; memoization — `@warlock.js/cache/use-cached-hof/SKILL.md`; competing libs `redlock`, `async-mutex`, `proper-lockfile`.'
+description: 'Distributed lock via cache.lock(key, ttl, fn) — acquire, run fn, auto-release. Returns {acquired: true, value} or {acquired: false}. Triggers: `cache.lock`, `LockOutcome`, `acquired`, `owner`; "run cron on only one server", "idempotent webhook handler", "dedup payment processing", "lock a task across nodes"; typical import `import { cache } from "@warlock.js/cache"`. Skip: raw `onConflict: "create"` recipe — the `apply-cache-patterns` topic; memoization — the `use-cached-hof` topic; competing libs `redlock`, `async-mutex`, `proper-lockfile`.'
 ---
 
 # `cache.lock()` — distributed locks with auto-release
@@ -13,7 +13,7 @@ description: 'Distributed lock via cache.lock(key, ttl, fn) — acquire, run fn,
 - Idempotent webhook or payment processing — dedup across retries.
 - Any time you'd otherwise write `try { … } finally { cache.remove(lockKey); }`.
 
-**Not for memoization** — use [`cached()`](@warlock.js/cache/use-cached-hof/SKILL.md) or `cache.remember()`.
+**Not for memoization** — use `cached()` (see the `use-cached-hof` topic) or `cache.remember()`.
 
 ## Shape
 

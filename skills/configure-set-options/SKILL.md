@@ -1,6 +1,6 @@
 ---
 name: configure-set-options
-description: 'Configure cache.set''s third argument — ttl, expiresAt, tags, onConflict (create / update / upsert), driver, vector. Triggers: `cache.set`, `ttl`, `expiresAt`, `tags`, `onConflict`, `driver`, `vector`, `CacheSetResult`, `wasSet`; "set a key only if missing", "set with absolute deadline", "attach tags inline", "route one cache call to redis"; typical import `import { cache } from "@warlock.js/cache"`. Skip: tag fluent API — `@warlock.js/cache/use-cache-tags/SKILL.md`; vector queries — `@warlock.js/cache/use-cache-similarity/SKILL.md`; competing libs `keyv`, `ioredis`.'
+description: 'Configure cache.set''s third argument — ttl, expiresAt, tags, onConflict (create / update / upsert), driver, vector. Triggers: `cache.set`, `ttl`, `expiresAt`, `tags`, `onConflict`, `driver`, `vector`, `CacheSetResult`, `wasSet`; "set a key only if missing", "set with absolute deadline", "attach tags inline", "route one cache call to redis"; typical import `import { cache } from "@warlock.js/cache"`. Skip: tag fluent API — the `use-cache-tags` topic; vector queries — the `use-cache-similarity` topic; competing libs `keyv`, `ioredis`.'
 ---
 
 # The `set` options object
@@ -32,10 +32,10 @@ await cache.set("user:1", user, {
 | --- | --- | --- |
 | `ttl` | `number \| string` | Relative expiry. Mutually exclusive with `expiresAt`. |
 | `expiresAt` | `number \| Date` | Absolute deadline (epoch ms or Date). Must be in the future. Mutually exclusive with `ttl`. |
-| `tags` | `string[]` | Inline equivalent of `cache.tags([...]).set(...)`. See [`@warlock.js/cache/use-cache-tags/SKILL.md`](@warlock.js/cache/use-cache-tags/SKILL.md). |
+| `tags` | `string[]` | Inline equivalent of `cache.tags([...]).set(...)`. See the `use-cache-tags` topic. |
 | `onConflict` | `"create" \| "update" \| "upsert"` | See below. Default `"upsert"`. |
 | `driver` | `string` | Per-call driver override by registered name. |
-| `vector` | `number[]` | Embedding indexed alongside the entry for [`cache.similar()`](@warlock.js/cache/use-cache-similarity/SKILL.md). Drivers without similarity support throw `CacheUnsupportedError`. |
+| `vector` | `number[]` | Embedding indexed alongside the entry for `cache.similar()` (see the `use-cache-similarity` topic). Drivers without similarity support throw `CacheUnsupportedError`. |
 
 ## TTL parsing
 

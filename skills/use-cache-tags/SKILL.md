@@ -1,6 +1,6 @@
 ---
 name: use-cache-tags
-description: 'Tag-based invalidation — attach tags on write, then cache.tags([...]).invalidate() drops every key bound to any of those tags. Triggers: `cache.tags`, `invalidate`, `cache.set` with `tags`; "invalidate every key tagged users", "drop everything for tenant 42", "bulk cache invalidation without knowing keys", "tag a cached value"; typical import `import { cache } from "@warlock.js/cache"`. Skip: prefix-based drop — `@warlock.js/cache/use-cache-namespace/SKILL.md`; HOF memoization with tags — `@warlock.js/cache/use-cached-hof/SKILL.md`; SWR — `@warlock.js/cache/use-swr/SKILL.md`; competing libs `cache-manager` tags, Next.js `revalidateTag`.'
+description: 'Tag-based invalidation — attach tags on write, then cache.tags([...]).invalidate() drops every key bound to any of those tags. Triggers: `cache.tags`, `invalidate`, `cache.set` with `tags`; "invalidate every key tagged users", "drop everything for tenant 42", "bulk cache invalidation without knowing keys", "tag a cached value"; typical import `import { cache } from "@warlock.js/cache"`. Skip: prefix-based drop — the `use-cache-namespace` topic; HOF memoization with tags — the `use-cached-hof` topic; SWR — the `use-swr` topic; competing libs `cache-manager` tags, Next.js `revalidateTag`.'
 ---
 
 # Tag-based invalidation
@@ -36,7 +36,7 @@ Multi-tag is **union** semantics: an entry is invalidated if it carries **at lea
 
 | Use case | Reach for |
 | --- | --- |
-| The keys share a known prefix | `cache.removeNamespace("prefix")` ([`use-cache-namespace`](@warlock.js/cache/use-cache-namespace/SKILL.md)) |
+| The keys share a known prefix | `cache.removeNamespace("prefix")` (the `use-cache-namespace` topic) |
 | The keys are spread across prefixes, tied by entity | Tags |
 | Both apply | Tags — more flexible; cheap on most drivers |
 
@@ -68,7 +68,7 @@ await cache.swr(
 );
 ```
 
-Tags re-apply on every successful refresh — see [`@warlock.js/cache/use-swr/SKILL.md`](@warlock.js/cache/use-swr/SKILL.md).
+Tags re-apply on every successful refresh — see the `use-swr` topic.
 
 ## `cached()` HOF with tags
 
@@ -79,7 +79,7 @@ const getPosts = cached(fn, { key: (u) => `posts.by.${u}`, ttl: "30m", tags: ["u
 await cache.tags(["users"]).invalidate();   // drops both wrappers' caches
 ```
 
-See [`@warlock.js/cache/use-cached-hof/SKILL.md`](@warlock.js/cache/use-cached-hof/SKILL.md).
+See the `use-cached-hof` topic.
 
 ## Things NOT to do
 

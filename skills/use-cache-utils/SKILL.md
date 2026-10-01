@@ -1,6 +1,6 @@
 ---
 name: use-cache-utils
-description: 'Low-level cache utilities re-exported from @warlock.js/cache — parseTtl, expiresAtToTtl, resolveTtl, normalizeToOptions, normalizeToRememberOptions, parseCacheKey, mergeTagSets, injectTags, cosineSimilarity, and the CACHE_FOR TTL enum. Triggers: `parseTtl`, `parseCacheKey`, `resolveTtl`, `expiresAtToTtl`, `cosineSimilarity`, `mergeTagSets`, `injectTags`, `CACHE_FOR`; "parse a duration to seconds", "build a cache key from an object", "score two vectors", "common TTL constant"; typical import `import { parseTtl, CACHE_FOR } from "@warlock.js/cache"`. Skip: building a whole custom driver — `@warlock.js/cache/pick-cache-driver/SKILL.md`; the high-level set API — `@warlock.js/cache/configure-set-options/SKILL.md`.'
+description: 'Low-level cache utilities re-exported from @warlock.js/cache — parseTtl, expiresAtToTtl, resolveTtl, normalizeToOptions, normalizeToRememberOptions, parseCacheKey, mergeTagSets, injectTags, cosineSimilarity, and the CACHE_FOR TTL enum. Triggers: `parseTtl`, `parseCacheKey`, `resolveTtl`, `expiresAtToTtl`, `cosineSimilarity`, `mergeTagSets`, `injectTags`, `CACHE_FOR`; "parse a duration to seconds", "build a cache key from an object", "score two vectors", "common TTL constant"; typical import `import { parseTtl, CACHE_FOR } from "@warlock.js/cache"`. Skip: building a whole custom driver — the `pick-cache-driver` topic; the high-level set API — the `configure-set-options` topic.'
 ---
 
 # Cache utilities
@@ -84,6 +84,6 @@ For most call sites the duration string (`"1h"`, `"7d"`) reads better.
 
 ## See also
 
-- [`@warlock.js/cache/configure-set-options/SKILL.md`](@warlock.js/cache/configure-set-options/SKILL.md) — the high-level `set` options these normalize
-- [`@warlock.js/cache/use-cache-similarity/SKILL.md`](@warlock.js/cache/use-cache-similarity/SKILL.md) — `cache.similar()`, which uses `cosineSimilarity`
-- [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md) — building a custom driver where these help
+- The `configure-set-options` topic — the high-level `set` options these normalize
+- The `use-cache-similarity` topic — `cache.similar()`, which uses `cosineSimilarity`
+- The `pick-cache-driver` topic — building a custom driver where these help

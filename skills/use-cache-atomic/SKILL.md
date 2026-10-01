@@ -1,6 +1,6 @@
 ---
 name: use-cache-atomic
-description: 'Atomic counters via cache.increment(key, by=1) / cache.decrement(key, by=1) — returns the new number, throws on non-numeric values. Triggers: `cache.increment`, `cache.decrement`, "view counter", "page views", "atomic counter", "decrement stock", "rate-limit counter", "INCRBY"; typical import `import { cache } from "@warlock.js/cache"`. Skip: read-modify-write of objects — `@warlock.js/cache/use-cache-update-merge/SKILL.md`; named-lock coordination — `@warlock.js/cache/use-cache-lock/SKILL.md`; competing libs `ioredis` `INCR`, native counters in a `Map`.'
+description: 'Atomic counters via cache.increment(key, by=1) / cache.decrement(key, by=1) — returns the new number, throws on non-numeric values. Triggers: `cache.increment`, `cache.decrement`, "view counter", "page views", "atomic counter", "decrement stock", "rate-limit counter", "INCRBY"; typical import `import { cache } from "@warlock.js/cache"`. Skip: read-modify-write of objects — the `use-cache-update-merge` topic; named-lock coordination — the `use-cache-lock` topic; competing libs `ioredis` `INCR`, native counters in a `Map`.'
 ---
 
 # Atomic counters — `cache.increment` / `cache.decrement`
@@ -36,7 +36,7 @@ Use `redis` or `pg` for anything several servers touch (rate limits, login throt
 
 ## TTL is kept
 
-Every driver keeps the key's **remaining TTL** across `increment`/`decrement`, so a fixed-window counter can't turn permanent. Set the TTL when you create the counter (`cache.set(key, 0, "1m")`, then `increment`). Use [`cache.update`](@warlock.js/cache/use-cache-update-merge/SKILL.md) for objects.
+Every driver keeps the key's **remaining TTL** across `increment`/`decrement`, so a fixed-window counter can't turn permanent. Set the TTL when you create the counter (`cache.set(key, 0, "1m")`, then `increment`). Use `cache.update` (see the `use-cache-update-merge` topic) for objects.
 
 ## Common shapes
 
@@ -54,6 +54,6 @@ if (remaining < 0) {
 
 ## See also
 
-- [`@warlock.js/cache/use-cache-update-merge/SKILL.md`](@warlock.js/cache/use-cache-update-merge/SKILL.md) — atomic read-modify-write for objects, TTL-preserving
-- [`@warlock.js/cache/use-cache-lock/SKILL.md`](@warlock.js/cache/use-cache-lock/SKILL.md) — coordinate multi-step critical sections
-- [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md) — when you need cross-node atomicity
+- The `use-cache-update-merge` topic — atomic read-modify-write for objects, TTL-preserving
+- The `use-cache-lock` topic — coordinate multi-step critical sections
+- The `pick-cache-driver` topic — when you need cross-node atomicity

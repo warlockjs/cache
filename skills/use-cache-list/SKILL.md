@@ -1,6 +1,6 @@
 ---
 name: use-cache-list
-description: 'Ordered collections via cache.list<T>(key) — push / unshift / pop / shift / slice / all / length / trim / clear. Triggers: `cache.list`, `push`, `unshift`, `pop`, `shift`, `slice`, `trim`, `clear`; "job queue in cache", "keep most recent N events", "audit log buffer", "FIFO queue"; typical import `import { cache } from "@warlock.js/cache"`. Skip: locking around list writes — `@warlock.js/cache/use-cache-lock/SKILL.md`; competing libs `bullmq`, `bee-queue`, `bull`, `ioredis` `LPUSH`; native `Array.push`.'
+description: 'Ordered collections via cache.list<T>(key) — push / unshift / pop / shift / slice / all / length / trim / clear. Triggers: `cache.list`, `push`, `unshift`, `pop`, `shift`, `slice`, `trim`, `clear`; "job queue in cache", "keep most recent N events", "audit log buffer", "FIFO queue"; typical import `import { cache } from "@warlock.js/cache"`. Skip: locking around list writes — the `use-cache-lock` topic; competing libs `bullmq`, `bee-queue`, `bull`, `ioredis` `LPUSH`; native `Array.push`.'
 ---
 
 # Lists — the `cache.list<T>(key)` sub-API
@@ -43,7 +43,7 @@ Redis-native `LPUSH` / `RPUSH` / `LRANGE` / `LTRIM` is planned for v2.1 (see `do
 
 ## Concurrency warning
 
-List writes on memory / file / LRU drivers **race** when two callers push simultaneously — the default read-mutate-write loop has no lock. If you need safe concurrent list writes today, wrap pushes in a distributed-lock pattern (see [`@warlock.js/cache/use-cache-lock/SKILL.md`](@warlock.js/cache/use-cache-lock/SKILL.md)) or use a single writer.
+List writes on memory / file / LRU drivers **race** when two callers push simultaneously — the default read-mutate-write loop has no lock. If you need safe concurrent list writes today, wrap pushes in a distributed-lock pattern (see the `use-cache-lock` topic) or use a single writer.
 
 Single-process memory with a single writer (typical test / script usage) is fine.
 

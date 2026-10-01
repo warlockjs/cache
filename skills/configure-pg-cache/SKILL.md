@@ -1,6 +1,6 @@
 ---
 name: configure-pg-cache
-description: 'Postgres cache driver setup — KV-only mode (default) or pgvector mode (opt in via options.pg.vector). Caller owns the pg.Pool, driver exposes driver.schema() for one-time DDL. Triggers: `PgCacheDriver`, `driver.schema`, `options.pg.vector`, `pg.Pool`, `hnsw`, `ivfflat`; "use Postgres as cache backend", "set up pgvector semantic cache", "DDL for warlock cache table"; typical import `import { cache, PgCacheDriver } from "@warlock.js/cache"`. Skip: cross-driver similarity API — `@warlock.js/cache/use-cache-similarity/SKILL.md`; driver picker — `@warlock.js/cache/pick-cache-driver/SKILL.md`; competing libs `pg-mem`; raw `pg` / `node-postgres`.'
+description: 'Postgres cache driver setup — KV-only mode (default) or pgvector mode (opt in via options.pg.vector). Caller owns the pg.Pool, driver exposes driver.schema() for one-time DDL. Triggers: `PgCacheDriver`, `driver.schema`, `options.pg.vector`, `pg.Pool`, `hnsw`, `ivfflat`; "use Postgres as cache backend", "set up pgvector semantic cache", "DDL for warlock cache table"; typical import `import { cache, PgCacheDriver } from "@warlock.js/cache"`. Skip: cross-driver similarity API — the `use-cache-similarity` topic; driver picker — the `pick-cache-driver` topic; competing libs `pg-mem`; raw `pg` / `node-postgres`.'
 ---
 
 # `pg` cache driver — Postgres setup
@@ -19,7 +19,7 @@ Persistent cache backed by your existing Postgres pool. Two modes: **KV-only** (
    - `update` → `UPDATE ... WHERE expires_at IS NULL OR expires_at > now() RETURNING value`.
    - `upsert` → unconditional `INSERT ... ON CONFLICT DO UPDATE`.
 7. **Atomic ops are cross-server:** `increment` is one upsert that keeps `expires_at`, `pull` is `DELETE … RETURNING`, `update` is a compare-and-set with bounded retries (callback may run more than once). Tags use a one-statement JSON-array merge.
-8. **`stale_at TIMESTAMPTZ` column** powers [stale-while-revalidate](@warlock.js/cache/use-swr/SKILL.md) — `cache.swr(...)` populates it on writes, plain `set()` leaves it null (always-fresh). Provision via `driver.schema()` like any other column.
+8. **`stale_at TIMESTAMPTZ` column** powers stale-while-revalidate (see the `use-swr` topic) — `cache.swr(...)` populates it on writes, plain `set()` leaves it null (always-fresh). Provision via `driver.schema()` like any other column.
 9. **pgvector requires `CREATE EXTENSION vector;` once on the database.** Lazy probe on first vector op throws `CacheConfigurationError` if missing; result is cached.
 10. **Vectors are passed as text literals** (`'[1,2,3]'::vector`). No binary protocol dependency — works against any pg client.
 
@@ -100,7 +100,7 @@ Switching strategies requires rebuilding the index.
 - `CacheConfigurationError: vector dimension mismatch` — input vector length ≠ configured dimensions. Embedder probably changed.
 - `CacheUnsupportedError: similarity retrieval requires the 'vector' config block` — KV-only mode; add `options.pg.vector`.
 
-See [`@warlock.js/cache/handle-cache-errors/SKILL.md`](@warlock.js/cache/handle-cache-errors/SKILL.md) for the full error class hierarchy.
+See the `handle-cache-errors` topic for the full error class hierarchy.
 
 ## Things NOT to do
 
@@ -112,5 +112,5 @@ See [`@warlock.js/cache/handle-cache-errors/SKILL.md`](@warlock.js/cache/handle-
 
 ## Related
 
-- [`@warlock.js/cache/use-cache-similarity/SKILL.md`](@warlock.js/cache/use-cache-similarity/SKILL.md) — the `similar()` API across all drivers
-- [`@warlock.js/cache/pick-cache-driver/SKILL.md`](@warlock.js/cache/pick-cache-driver/SKILL.md) — comparing pg with memory / redis / file
+- The `use-cache-similarity` topic — the `similar()` API across all drivers
+- The `pick-cache-driver` topic — comparing pg with memory / redis / file
